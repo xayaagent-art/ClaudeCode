@@ -4,9 +4,9 @@ Wheel options strategy tracker PWA. Dark-mode, mobile-first, Robinhood-inspired.
 
 ## One-Click Deploy
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fxayaagent-art%2FClaudeCode&env=VITE_SUPABASE_URL,VITE_SUPABASE_ANON_KEY&envDescription=Supabase%20credentials%20(leave%20blank%20for%20demo%20mode)&project-name=thetawheel&framework=vite)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fxayaagent-art%2FClaudeCode%2Ftree%2Fclaude%2Fbuild-thetawheel-pwa-L9zw0&project-name=thetawheel&framework=vite)
 
-**No Supabase? No problem.** Leave the env vars blank and the app runs in demo mode with sample data stored in localStorage.
+**No Supabase needed.** The app runs in demo mode with sample data stored in localStorage. No env vars required.
 
 ## Stack
 

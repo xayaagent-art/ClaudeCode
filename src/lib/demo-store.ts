@@ -264,7 +264,8 @@ function saveDemo(data: DemoData) {
 }
 
 export function isDemoMode(): boolean {
-  return !import.meta.env.VITE_SUPABASE_URL || import.meta.env.VITE_SUPABASE_URL === ''
+  const url = import.meta.env.VITE_SUPABASE_URL || ''
+  return !url || url === 'NA' || url === 'na' || url === 'none' || !url.startsWith('http')
 }
 
 export function getDemoUser(): User {
