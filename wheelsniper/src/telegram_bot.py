@@ -1,7 +1,7 @@
 """
 telegram_bot.py — Telegram bot for alerts and command interface.
 
-Sends formatted trade signals and provides commands:
+Sends formatted trade signals with BB, VWAP, key levels, and provides commands:
 /status, /scan, /pnl, /positions
 """
 
@@ -31,7 +31,8 @@ def _vix_line(signal: dict) -> str:
         "high_fear": "High fear",
     }
     label = env_labels.get(env, env)
-    return f"VIX: {vix if vix else 'N/A'} ({label})"
+    vix_emoji = "\u2705" if env == "elevated" else ""
+    return f"VIX: {vix if vix else 'N/A'} ({label}) {vix_emoji}".rstrip()
 
 
 def _earnings_line(signal: dict) -> str:
@@ -40,8 +41,9 @@ def _earnings_line(signal: dict) -> str:
     if earnings.get("earnings_date"):
         days = earnings.get("days_until")
         date = earnings["earnings_date"]
+        safe = "\u2705 Safe" if days and days > 10 else ""
         if days is not None:
-            return f"\U0001f4c5 Earnings: {date} ({days}d away)"
+            return f"\U0001f4c5 Earnings: {date} ({days}d away) {safe}".rstrip()
         return f"\U0001f4c5 Earnings: {date}"
     return "\U0001f4c5 Earnings: None in window \u2705"
 
@@ -53,33 +55,136 @@ def _macd_label(trend: str) -> str:
     return "\U0001f4c9 Bearish MACD"
 
 
-def _tags_line(tags: list) -> str:
-    """Format signal tags if present."""
+def _rsi_label(rsi: float) -> str:
+    """Format RSI with oversold/overbought indicator."""
+    if rsi < 30:
+        return f"{rsi:.0f} \U0001f4c9 Oversold"
+    if rsi < 40:
+        return f"{rsi:.0f} \U0001f4c9 Near oversold"
+    if rsi > 70:
+        return f"{rsi:.0f} \U0001f4c8 Overbought"
+    if rsi > 60:
+        return f"{rsi:.0f} \U0001f4c8 Near overbought"
+    return f"{rsi:.0f}"
+
+
+def _bb_line(signal: dict) -> str:
+    """Build Bollinger Bands display line."""
+    bb_lower = signal.get("bb_lower")
+    bb_upper = signal.get("bb_upper")
+    pct_b = signal.get("bb_pct_b")
+    position = signal.get("bb_position", "unknown")
+
+    if bb_lower is None or bb_upper is None:
+        return "BB: N/A"
+
+    pos_flags = {
+        "at_lower": "\U0001f3af At lower band",
+        "at_upper": "\U0001f3af At upper band",
+        "middle": "Middle",
+        "unknown": "",
+    }
+    flag = pos_flags.get(position, "")
+    pct_str = f"{pct_b:.2f}" if pct_b is not None else "N/A"
+    return f"BB: ${bb_lower:.2f} / ${bb_upper:.2f} | %B: {pct_str} {flag}".rstrip()
+
+
+def _vwap_line(signal: dict) -> str:
+    """Build VWAP display line."""
+    vwap = signal.get("vwap")
+    position = signal.get("vwap_position", "unknown")
+    if vwap is None:
+        return "VWAP: N/A"
+    if position == "below":
+        return f"VWAP: ${vwap:.2f} (price below \u2705)"
+    elif position == "above":
+        return f"VWAP: ${vwap:.2f} (price above \u2705)"
+    return f"VWAP: ${vwap:.2f}"
+
+
+def _csp_key_levels_block(signal: dict) -> str:
+    """Build key levels block for CSP alerts."""
+    levels = signal.get("levels")
+    if not levels:
+        return ""
+
+    lines = ["Key levels:"]
+    pdl = levels.get("pdl")
+    pwl = levels.get("pwl")
+    monthly_low = levels.get("monthly_low")
+
+    parts = []
+    if pdl is not None:
+        parts.append(f"PDL: ${pdl:.2f}")
+    if pwl is not None:
+        parts.append(f"PWL: ${pwl:.2f}")
+    if monthly_low is not None:
+        parts.append(f"Monthly low: ${monthly_low:.2f}")
+    if parts:
+        lines.append(" | ".join(parts))
+
+    return "\n".join(lines)
+
+
+def _cc_key_levels_block(signal: dict) -> str:
+    """Build key levels block for CC alerts."""
+    levels = signal.get("levels")
+    if not levels:
+        return ""
+
+    lines = ["Key levels:"]
+    pdh = levels.get("pdh")
+    pwh = levels.get("pwh")
+    monthly_high = levels.get("monthly_high")
+
+    parts = []
+    if pdh is not None:
+        parts.append(f"PDH: ${pdh:.2f}")
+    if pwh is not None:
+        parts.append(f"PWH: ${pwh:.2f}")
+    if monthly_high is not None:
+        parts.append(f"Monthly high: ${monthly_high:.2f}")
+    if parts:
+        lines.append(" | ".join(parts))
+
+    return "\n".join(lines)
+
+
+def _tags_block(tags: list) -> str:
+    """Format signal tags as a block."""
     if not tags:
         return ""
-    return "\n".join(tags) + "\n"
+    return "\n".join(tags)
 
 
 def format_csp_alert(signal: dict) -> str:
-    """Format a CSP signal into a Telegram message."""
+    """Format a CSP signal into a Telegram message with full Phase 2B data."""
     direction = "\u2193" if signal["change_pct"] < 0 else "\u2191"
     day_emoji = "\U0001f534" if signal["change_pct"] < 0 else "\U0001f7e2"
     day_label = "Red day" if signal["change_pct"] < 0 else "Green day"
 
-    tags = _tags_line(signal.get("tags", []))
     vix_note = f"\n{signal['vix_note']}" if signal.get("vix_note") else ""
+
+    # Build key levels + tags section
+    key_levels = _csp_key_levels_block(signal)
+    tags = _tags_block(signal.get("tags", []))
+    levels_section = ""
+    if key_levels or tags:
+        parts = [p for p in [key_levels, tags] if p]
+        levels_section = f"\n".join(parts) + "\n"
 
     return (
         f"\U0001f534 CSP SIGNAL \u2014 {signal['ticker']}\n"
         f"{SEP}\n"
-        f"{tags}"
-        f"Price: ${signal['price']:.2f} ({direction} {abs(signal['change_pct']):.1f}% today) "
+        f"Price: ${signal['price']:.2f} ({direction} {abs(signal['change_pct']):.1f}%) "
         f"{day_emoji} {day_label} \u2705\n"
-        f"RSI: {signal['rsi_14']:.0f} | IVR: {signal['ivr']:.0f} | IV: {signal['iv']:.0f}%\n"
-        f"Trend: {_macd_label(signal['macd_trend'])}\n"
-        f"{_vix_line(signal)}{vix_note}\n"
+        f"RSI: {_rsi_label(signal['rsi_14'])} | IVR: {signal['ivr']:.0f} | IV: {signal['iv']:.0f}%\n"
+        f"Trend: {_macd_label(signal['macd_trend'])} | {_vix_line(signal)}{vix_note}\n"
+        f"{_bb_line(signal)}\n"
+        f"{_vwap_line(signal)}\n"
         f"20MA: ${signal['ma_20']:.2f} | 50MA: ${signal['ma_50']:.2f} | {signal['ma_position']}\n"
-        f"52W Low: ${signal['week52_low']:.2f} | 52W High: ${signal['week52_high']:.2f}\n"
+        f"{SEP}\n"
+        f"{levels_section}"
         f"{SEP}\n"
         f"Setup: {signal['expiry']} ${signal['strike']:.2f}P (DTE: {signal['dte']})\n"
         f"Delta: {signal['delta']:.2f} | Premium: ${signal['premium']:.2f}\n"
@@ -92,27 +197,36 @@ def format_csp_alert(signal: dict) -> str:
 
 
 def format_cc_alert(signal: dict) -> str:
-    """Format a CC signal into a Telegram message."""
+    """Format a CC signal into a Telegram message with full Phase 2B data."""
     direction = "\u2191" if signal["change_pct"] > 0 else "\u2193"
     pnl_if_called = signal.get("pnl_if_called", 0)
     pnl_sign = "+" if pnl_if_called >= 0 else "-"
     contracts = signal.get("shares", 100) // 100
 
-    tags = _tags_line(signal.get("tags", []))
     vix_note = f"\n{signal['vix_note']}" if signal.get("vix_note") else ""
+
+    # Build key levels + tags section
+    key_levels = _cc_key_levels_block(signal)
+    tags = _tags_block(signal.get("tags", []))
+    levels_section = ""
+    if key_levels or tags:
+        parts = [p for p in [key_levels, tags] if p]
+        levels_section = f"\n".join(parts) + "\n"
 
     return (
         f"\U0001f7e2 CC SIGNAL \u2014 {signal['ticker']}\n"
         f"{SEP}\n"
-        f"{tags}"
-        f"Price: ${signal['price']:.2f} ({direction} {abs(signal['change_pct']):.1f}% today) "
+        f"Price: ${signal['price']:.2f} ({direction} {abs(signal['change_pct']):.1f}%) "
         f"\U0001f7e2 Green day \u2705\n"
         f"Cost basis: ${signal['cost_basis']:.2f} | "
         f"P&L if called: {pnl_sign}${abs(pnl_if_called):,.2f}\n"
-        f"RSI: {signal['rsi_14']:.0f} | IVR: {signal['ivr']:.0f} | IV: {signal['iv']:.0f}%\n"
-        f"Trend: {_macd_label(signal['macd_trend'])}\n"
-        f"{_vix_line(signal)}{vix_note}\n"
+        f"RSI: {_rsi_label(signal['rsi_14'])} | IVR: {signal['ivr']:.0f} | IV: {signal['iv']:.0f}%\n"
+        f"Trend: {_macd_label(signal['macd_trend'])} | {_vix_line(signal)}{vix_note}\n"
+        f"{_bb_line(signal)}\n"
+        f"{_vwap_line(signal)}\n"
         f"20MA: ${signal['ma_20']:.2f} | 50MA: ${signal['ma_50']:.2f}\n"
+        f"{SEP}\n"
+        f"{levels_section}"
         f"{SEP}\n"
         f"Setup: {signal['expiry']} ${signal['strike']:.2f}C (DTE: {signal['dte']})\n"
         f"Delta: {signal['delta']:.2f} | Premium: ${signal['premium']:.2f}\n"
@@ -125,13 +239,37 @@ def format_cc_alert(signal: dict) -> str:
 
 
 def format_close_alert(signal: dict, monthly_total: float = 0, monthly_target: int = 3500) -> str:
-    """Format a close signal into a Telegram message."""
+    """Format a time-weighted close signal into a Telegram message."""
     opt_type = "P" if signal["trade_type"] == "CSP" else "C"
+    theta_label = "\u26a1 accelerating" if signal.get("theta_accelerating") else "normal"
+    theta_daily = signal.get("theta_daily", 0)
+    profit_target = signal.get("profit_target", 50)
+    days_held = signal.get("days_held", 0)
+    opened_date = signal.get("opened_date", "N/A")
+
+    # Theta acceleration special format
+    if signal.get("reason") == "theta_acceleration":
+        return (
+            f"\u26a1 THETA ALERT \u2014 {signal['ticker']} {signal['trade_type']}\n"
+            f"{SEP}\n"
+            f"Position entering fast theta decay zone (DTE: {signal['dte']})\n"
+            f"Credit: ${signal['open_premium']:.2f} \u2192 Now: ${signal['current_price']:.2f}\n"
+            f"Profit: {signal['profit_pct']:.0f}%\n"
+            f"Consider closing at 35%+ profit now.\n"
+            f"{SEP}\n"
+            f"Action: BUY TO CLOSE {signal['ticker']} {signal['expiry']} ${signal['strike']:.2f}{opt_type}"
+        )
+
     return (
         f"\u2705 CLOSE TARGET \u2014 {signal['ticker']} {signal['trade_type']}\n"
-        f"Opened @ ${signal['open_premium']:.2f} credit | Now: ${signal['current_price']:.2f} "
-        f"({signal['profit_pct']:.0f}% profit)\n"
-        f"Monthly total: ${monthly_total:,.0f} / ${monthly_target:,} target\n"
+        f"{SEP}\n"
+        f"Opened: {opened_date} ({days_held} days ago)\n"
+        f"Credit: ${signal['open_premium']:.2f} \u2192 Now: ${signal['current_price']:.2f}\n"
+        f"Profit: {signal['profit_pct']:.0f}% \U0001f3af {profit_target}% threshold hit\n"
+        f"Days held: {days_held} | DTE remaining: {signal['dte']}\n"
+        f"Theta: -${theta_daily:.2f}/day ({theta_label})\n"
+        f"{SEP}\n"
+        f"Monthly P&L: ${monthly_total:,.0f} / ${monthly_target:,} target\n"
         f"Action: BUY TO CLOSE {signal['ticker']} {signal['expiry']} ${signal['strike']:.2f}{opt_type}"
     )
 

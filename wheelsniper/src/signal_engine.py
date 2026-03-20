@@ -4,22 +4,23 @@ signal_engine.py — Core signal logic for the Wheel Strategy.
 Evaluates each ticker against CSP, CC, close, and roll rules,
 then returns actionable signals with full trade details.
 
-Phase 2A filter rules:
-- CSP: red day (IVR>70 override), RSI<40 (IVR>65 override), IVR>=30,
-  bullish MACD (IVR>60 override), yield>=1.5%, DTE 21-45, delta 0.20-0.30,
-  no earnings 10d
-- CC: green day, RSI>60, 100+ shares, strike>basis, DTE 21-35,
-  delta 0.25-0.35, no earnings 10d, EOSE special rule
-- VIX overlay on all signals
+Phase 2A filters + Phase 2B enhancements:
+- Bollinger Band boost/block on CSP and CC
+- Key level support/resistance tags
+- VWAP intraday bias overlay
+- Time-weighted close thresholds
+- Theta acceleration alerts
 """
 
 import logging
+from datetime import datetime
 from typing import Optional
 
 import yaml
 
 from src.earnings_filter import has_upcoming_earnings
 from src.iv_calculator import calculate_ivr
+from src.key_levels import get_key_levels
 from src.market_data import get_market_data, get_options_chain, get_vix
 from src.strike_selector import calculate_yield, select_call_strike, select_put_strike
 
@@ -40,7 +41,27 @@ def _get_vix_note(vix_level: Optional[float], vix_env: str) -> Optional[str]:
         return "\u2705 Elevated vol \u2014 favorable premium environment"
     elif vix_env == "high_fear":
         return "\u26a0\ufe0f High fear \u2014 reduce contract size 20\u201330%"
-    return None  # normal — no note
+    return None
+
+
+def _get_time_weighted_target(days_held: int, dte: int) -> int:
+    """Return the profit % target based on how long the position has been held.
+
+    - days 1-3:   35% (quick flip)
+    - days 4-7:   40%
+    - days 8-14:  50% (standard)
+    - days 15-21: 25% (take what you can)
+    - days >21 or DTE<7: 1% (any profit)
+    """
+    if days_held > 21 or dte < 7:
+        return 1
+    if days_held <= 3:
+        return 35
+    if days_held <= 7:
+        return 40
+    if days_held <= 14:
+        return 50
+    return 25
 
 
 def scan_csp_signals(config: dict = None) -> list[dict]:
@@ -93,22 +114,13 @@ def scan_close_signals(config: dict = None) -> list[dict]:
 def evaluate_csp(ticker: str, params: dict) -> Optional[dict]:
     """Evaluate a single ticker for CSP signal.
 
-    Filters (all must pass):
-    1. Red day — EXCEPT IVR > 70 (post-catalyst override)
-    2. RSI < 40 — EXCEPT IVR > 65 (premium override)
-    3. IVR >= 30 (hard minimum)
-    4. Bullish MACD OR IVR > 60
-    5. Premium yield >= 1.5%
-    6. DTE 21–45
-    7. Delta 0.20–0.30
-    8. No earnings within 10 days
+    Phase 2A filters + Phase 2B Bollinger/key level/VWAP enhancements.
     """
-    # Get full market data (includes technicals)
     data = get_market_data(ticker)
     if not data:
         return None
 
-    # Check IVR (hard minimum — check early to skip fast)
+    # Check IVR (hard minimum)
     ivr_data = calculate_ivr(ticker)
     if not ivr_data or ivr_data["ivr"] < params.get("ivr_min", 30):
         return None
@@ -118,7 +130,6 @@ def evaluate_csp(ticker: str, params: dict) -> Optional[dict]:
 
     # 1. Red day check — IVR > 70 overrides
     is_red = data["change_pct"] < 0
-    is_green = data["change_pct"] >= 0
     if not is_red:
         if ivr > 70:
             tags.append("\u26a1 Post-catalyst override")
@@ -130,10 +141,12 @@ def evaluate_csp(ticker: str, params: dict) -> Optional[dict]:
         if data["rsi_14"] >= 40 and ivr <= 65:
             return None
 
-    # 3. IVR >= 30 already checked above
-
     # 4. Bullish MACD OR IVR > 60
     if data["macd_trend"] == "bearish" and ivr <= 60:
+        return None
+
+    # BB block: price near upper band = wrong time for CSP
+    if data.get("bb_pct_b") is not None and data["bb_pct_b"] > 0.7:
         return None
 
     # 8. Earnings blackout (10 days hard block)
@@ -143,14 +156,14 @@ def evaluate_csp(ticker: str, params: dict) -> Optional[dict]:
         logger.info(f"Skipping {ticker} CSP \u2014 earnings in {earnings['days_until']} days")
         return None
 
-    # 6. Get options chain (DTE 21–45)
+    # 6. Get options chain (DTE 21-45)
     dte_min = params.get("dte_min", 21)
     dte_max = params.get("dte_max", 45)
     chain = get_options_chain(ticker, dte_min, dte_max)
     if not chain:
         return None
 
-    # 7. Select strike (delta 0.20–0.30)
+    # 7. Select strike (delta 0.20-0.30)
     delta_min = params.get("csp_delta_min", 0.20)
     delta_max = params.get("csp_delta_max", 0.30)
     strike = select_put_strike(chain["puts"], data["price"], delta_min, delta_max)
@@ -162,8 +175,35 @@ def evaluate_csp(ticker: str, params: dict) -> Optional[dict]:
     if yield_info["yield_pct"] < 1.5:
         return None
 
-    # Breakeven
     breakeven = round(strike["strike"] - strike["premium"], 2)
+
+    # --- Phase 2B: Key levels ---
+    levels = get_key_levels(
+        ticker,
+        bb_lower=data.get("bb_lower"),
+        bb_upper=data.get("bb_upper"),
+        ma_20=data.get("ma_20"),
+        ma_50=data.get("ma_50"),
+    )
+
+    # BB + RSI confluence tag (highest conviction)
+    if data.get("bb_position") == "at_lower" and data.get("rsi_14") is not None and data["rsi_14"] < 40:
+        tags.append("\U0001f3af BB lower band + oversold RSI \u2014 HIGH CONVICTION")
+
+    # Key level CSP boost tags
+    if levels:
+        if levels.get("at_weekly_support"):
+            tags.append("\U0001f6e1\ufe0f At weekly support")
+        if levels.get("at_monthly_low"):
+            tags.append("\U0001f4c5 Near monthly low \u2014 strong support")
+        if levels.get("support_confluence"):
+            tags.append("\U0001f4aa Support confluence")
+        if levels.get("pdl_proximity") is not None and levels["pdl_proximity"] < 2:
+            tags.append("\U0001f4cd Near previous day low")
+
+    # VWAP context
+    vwap = data.get("vwap")
+    vwap_position = data.get("vwap_position", "unknown")
 
     # VIX overlay
     vix_note = _get_vix_note(data["vix_level"], data["vix_env"])
@@ -176,18 +216,27 @@ def evaluate_csp(ticker: str, params: dict) -> Optional[dict]:
         "ivr": ivr,
         "iv": ivr_data["current_iv"],
         "rsi_14": data["rsi_14"],
+        "rsi_divergence": data.get("rsi_divergence", "none"),
         "macd_trend": data["macd_trend"],
         "macd_line": data["macd_line"],
         "signal_line": data["signal_line"],
         "ma_20": data["ma_20"],
         "ma_50": data["ma_50"],
         "ma_position": data["ma_position"],
+        "bb_upper": data.get("bb_upper"),
+        "bb_lower": data.get("bb_lower"),
+        "bb_width": data.get("bb_width"),
+        "bb_pct_b": data.get("bb_pct_b"),
+        "bb_position": data.get("bb_position"),
+        "vwap": vwap,
+        "vwap_position": vwap_position,
         "week52_high": data["week52_high"],
         "week52_low": data["week52_low"],
         "pct_from_52w_low": data["pct_from_52w_low"],
         "vix_level": data["vix_level"],
         "vix_env": data["vix_env"],
         "vix_note": vix_note,
+        "levels": levels,
         "expiry": chain["expiry"],
         "dte": chain["days_to_expiry"],
         "strike": strike["strike"],
@@ -206,16 +255,8 @@ def evaluate_csp(ticker: str, params: dict) -> Optional[dict]:
 def evaluate_cc(ticker: str, position: dict, params: dict) -> Optional[dict]:
     """Evaluate a single assigned position for CC signal.
 
-    Filters (all must pass):
-    1. Green day
-    2. RSI > 60
-    3. 100+ shares (already filtered by caller)
-    4. Strike > cost basis
-    5. DTE 21–35
-    6. Delta 0.25–0.35
-    7. No earnings within 10 days
-
-    EOSE special rule: delta 0.35–0.45, skip RSI check, add recovery tag.
+    Phase 2A filters + Phase 2B Bollinger/key level/VWAP enhancements.
+    EOSE special rule: delta 0.35-0.45, skip RSI check, recovery tag.
     """
     data = get_market_data(ticker)
     if not data:
@@ -229,7 +270,7 @@ def evaluate_cc(ticker: str, position: dict, params: dict) -> Optional[dict]:
     conviction = position.get("conviction", "medium")
     is_eose = ticker == "EOSE"
 
-    # 1. Green day (EOSE: any green day regardless)
+    # 1. Green day
     if data["change_pct"] <= 0:
         return None
 
@@ -238,7 +279,6 @@ def evaluate_cc(ticker: str, position: dict, params: dict) -> Optional[dict]:
         if data["rsi_14"] is not None and data["rsi_14"] <= 60:
             return None
 
-    # EOSE special handling
     if is_eose:
         tags.append("\u26aa Recovery mode \u2014 aggressive CC to lower basis")
 
@@ -249,14 +289,14 @@ def evaluate_cc(ticker: str, position: dict, params: dict) -> Optional[dict]:
         logger.info(f"Skipping {ticker} CC \u2014 earnings in {earnings['days_until']} days")
         return None
 
-    # 5. Get options chain (DTE 21–35)
+    # 5. Get options chain (DTE 21-35)
     cc_dte_min = params.get("cc_dte_min", params.get("dte_min", 21))
     cc_dte_max = params.get("cc_dte_max", 35)
     chain = get_options_chain(ticker, cc_dte_min, cc_dte_max)
     if not chain:
         return None
 
-    # 6. Select strike — EOSE uses aggressive delta 0.35–0.45, others 0.25–0.35
+    # 6. Select strike — EOSE aggressive, others standard
     if is_eose:
         cc_delta_min = 0.35
         cc_delta_max = 0.45
@@ -274,9 +314,42 @@ def evaluate_cc(ticker: str, position: dict, params: dict) -> Optional[dict]:
         return None
 
     yield_info = calculate_yield(strike["premium"], cost_basis, chain["days_to_expiry"])
-
-    # P&L if called away
     pnl_if_called = round((strike["strike"] - cost_basis) * position.get("shares", 100) + strike["premium"] * 100, 2)
+
+    # --- Phase 2B: Key levels ---
+    levels = get_key_levels(
+        ticker,
+        bb_lower=data.get("bb_lower"),
+        bb_upper=data.get("bb_upper"),
+        ma_20=data.get("ma_20"),
+        ma_50=data.get("ma_50"),
+    )
+
+    # BB + RSI confluence tag (highest conviction CC)
+    if data.get("bb_position") == "at_upper" and data.get("rsi_14") is not None and data["rsi_14"] > 60:
+        tags.append("\U0001f3af BB upper band + overbought RSI")
+
+    # Strike vs BB upper band
+    bb_upper = data.get("bb_upper")
+    if bb_upper and strike["strike"] > bb_upper:
+        tags.append("\u2705 Strike above BB upper \u2014 strong resistance")
+    elif bb_upper and strike["strike"] <= bb_upper:
+        tags.append("\u26a0\ufe0f Strike below BB upper \u2014 check resistance")
+
+    # Key level CC boost tags
+    if levels:
+        if levels.get("at_weekly_resistance"):
+            tags.append("\U0001f9f1 At weekly resistance")
+        if levels.get("at_monthly_high"):
+            tags.append("\U0001f4c5 Near monthly high")
+        if levels.get("resistance_confluence"):
+            tags.append("\U0001f4aa Resistance confluence")
+        if levels.get("pdh_proximity") is not None and levels["pdh_proximity"] < 2:
+            tags.append("\U0001f4cd Near previous day high")
+
+    # VWAP context
+    vwap = data.get("vwap")
+    vwap_position = data.get("vwap_position", "unknown")
 
     # VIX overlay
     vix_note = _get_vix_note(data["vix_level"], data["vix_env"])
@@ -289,17 +362,26 @@ def evaluate_cc(ticker: str, position: dict, params: dict) -> Optional[dict]:
         "ivr": ivr_data["ivr"],
         "iv": ivr_data["current_iv"],
         "rsi_14": data["rsi_14"],
+        "rsi_divergence": data.get("rsi_divergence", "none"),
         "macd_trend": data["macd_trend"],
         "macd_line": data["macd_line"],
         "signal_line": data["signal_line"],
         "ma_20": data["ma_20"],
         "ma_50": data["ma_50"],
         "ma_position": data["ma_position"],
+        "bb_upper": data.get("bb_upper"),
+        "bb_lower": data.get("bb_lower"),
+        "bb_width": data.get("bb_width"),
+        "bb_pct_b": data.get("bb_pct_b"),
+        "bb_position": data.get("bb_position"),
+        "vwap": vwap,
+        "vwap_position": vwap_position,
         "week52_high": data["week52_high"],
         "week52_low": data["week52_low"],
         "vix_level": data["vix_level"],
         "vix_env": data["vix_env"],
         "vix_note": vix_note,
+        "levels": levels,
         "expiry": chain["expiry"],
         "dte": chain["days_to_expiry"],
         "strike": strike["strike"],
@@ -319,13 +401,15 @@ def evaluate_cc(ticker: str, position: dict, params: dict) -> Optional[dict]:
 
 
 def evaluate_close(trade: dict, params: dict) -> Optional[dict]:
-    """Evaluate an open trade for close signal.
+    """Evaluate an open trade for close signal using time-weighted targets.
 
-    Checks current option price against entry premium to determine
-    if the 50% profit target or DTE-based close rule is met.
+    Close thresholds based on days_held:
+    - 1-3 days:  35% (quick flip)
+    - 4-7 days:  40%
+    - 8-14 days: 50% (standard)
+    - 15-21 days: 25% (take what you can)
+    - >21 days or DTE<7: any profit
     """
-    from datetime import datetime
-
     from src.market_data import get_options_chain
 
     ticker = trade["ticker"]
@@ -335,6 +419,13 @@ def evaluate_close(trade: dict, params: dict) -> Optional[dict]:
 
     if dte < 0:
         return None
+
+    # Calculate days held
+    opened_date = datetime.strptime(trade["opened_date"], "%Y-%m-%d").date()
+    days_held = (today - opened_date).days
+
+    # Get time-weighted profit target
+    profit_target = _get_time_weighted_target(days_held, dte)
 
     # Fetch current option price
     chain = get_options_chain(ticker, dte_min=0, dte_max=dte + 1)
@@ -346,7 +437,6 @@ def evaluate_close(trade: dict, params: dict) -> Optional[dict]:
     if options.empty:
         return None
 
-    # Find the matching strike
     match = options[options["strike"] == trade["strike"]]
     if match.empty:
         return None
@@ -359,19 +449,51 @@ def evaluate_close(trade: dict, params: dict) -> Optional[dict]:
     open_premium = trade["premium"]
     profit_pct = ((open_premium - current_price) / open_premium) * 100 if open_premium > 0 else 0
 
-    # Rule 1: 50% profit target
-    if profit_pct >= params["close_profit_pct"]:
-        return _build_close_signal(trade, current_price, profit_pct, dte, reason="50% profit target")
+    # Estimate daily theta (premium / DTE as rough proxy)
+    theta_daily = round(current_price / max(dte, 1), 3) if current_price > 0 else 0
+    theta_accelerating = dte <= 21
 
-    # Rule 2: Within 7 DTE with < 25% remaining profit
-    if dte <= params["close_dte_threshold"] and profit_pct < params["close_dte_profit_pct"]:
-        return _build_close_signal(trade, current_price, profit_pct, dte, reason="DTE close rule")
+    signals = []
 
-    return None
+    # Time-weighted close target hit
+    if profit_pct >= profit_target:
+        signals.append(_build_close_signal(
+            trade, current_price, profit_pct, dte, days_held,
+            profit_target, theta_daily, theta_accelerating,
+            reason=f"{profit_target}% target hit ({_target_label(days_held, dte)})",
+        ))
+
+    # Theta acceleration alert: one-time when DTE crosses below 21
+    if dte <= 21 and dte >= 14 and days_held > 0:
+        if profit_pct >= 35:
+            signals.append(_build_close_signal(
+                trade, current_price, profit_pct, dte, days_held,
+                profit_target, theta_daily, theta_accelerating,
+                reason="theta_acceleration",
+            ))
+
+    return signals[0] if signals else None
 
 
-def _build_close_signal(trade: dict, current_price: float, profit_pct: float, dte: int, reason: str) -> dict:
-    """Build a close signal dict."""
+def _target_label(days_held: int, dte: int) -> str:
+    """Human-readable label for the close target tier."""
+    if days_held > 21 or dte < 7:
+        return "any profit \u2014 expiring soon"
+    if days_held <= 3:
+        return "quick flip"
+    if days_held <= 7:
+        return "early close"
+    if days_held <= 14:
+        return "standard"
+    return "time decay \u2014 take profits"
+
+
+def _build_close_signal(
+    trade: dict, current_price: float, profit_pct: float, dte: int,
+    days_held: int, profit_target: int, theta_daily: float,
+    theta_accelerating: bool, reason: str,
+) -> dict:
+    """Build a close signal dict with time-weighted fields."""
     return {
         "type": "CLOSE",
         "ticker": trade["ticker"],
@@ -383,6 +505,11 @@ def _build_close_signal(trade: dict, current_price: float, profit_pct: float, dt
         "open_premium": trade["premium"],
         "current_price": round(current_price, 2),
         "profit_pct": round(profit_pct, 1),
+        "profit_target": profit_target,
         "profit_dollars": round((trade["premium"] - current_price) * 100 * trade["quantity"], 2),
+        "days_held": days_held,
+        "opened_date": trade["opened_date"],
+        "theta_daily": theta_daily,
+        "theta_accelerating": theta_accelerating,
         "reason": reason,
     }
