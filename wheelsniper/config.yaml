@@ -13,22 +13,28 @@ signal_params:
   # Delta range for CSP strikes
   csp_delta_min: 0.20
   csp_delta_max: 0.30
-  # Max delta for CC strikes
-  cc_delta_max: 0.20
-  # DTE window for new positions
+  # Delta range for CC strikes
+  cc_delta_min: 0.25
+  cc_delta_max: 0.35
+  # DTE window for CSP positions
   dte_min: 21
-  dte_max: 35
+  dte_max: 45
+  # DTE window for CC positions
+  cc_dte_min: 21
+  cc_dte_max: 35
   # Close at this % of max profit
   close_profit_pct: 50
   # Close if within this many DTE with < close_dte_profit_pct remaining
   close_dte_threshold: 7
   close_dte_profit_pct: 25
   # Skip tickers with earnings within this many days
-  earnings_blackout_days: 7
+  earnings_blackout_days: 10
   # 20-day MA proximity threshold (% distance from MA to count as "near support")
   ma_support_pct: 3.0
   # 50-day MA proximity threshold for CC resistance
   ma_resistance_pct: 3.0
+  # Minimum premium yield for CSP signals (%)
+  min_yield_pct: 1.5
 
 # Alert deduplication window in hours
 alert_dedup_hours: 4
@@ -56,13 +62,74 @@ watchlist:
   - ONDS
   - TE
   - AXT
+  - EOSE
+  - SOFI
+  - BMNU
 
 # Assigned positions — tickers where you hold 100+ shares and can sell CCs
 # Update shares and cost_basis as your positions change.
+# conviction: high / medium / low (affects CC aggressiveness)
 positions:
+  HIMS:
+    shares: 105
+    cost_basis: 41.13
+    conviction: medium
+    earnings: "2026-05-11"
+  ASTS:
+    shares: 100
+    cost_basis: 100.00
+    conviction: high
+    earnings: "2026-05-18"
+  NBIS:
+    shares: 113
+    cost_basis: 98.53
+    conviction: medium
+    earnings: null
+  IREN:
+    shares: 100
+    cost_basis: 50.00
+    conviction: medium
+    earnings: "2026-05-13"
+  RKLB:
+    shares: 100
+    cost_basis: 80.00
+    conviction: medium
+    earnings: null
   SOFI:
     shares: 100
-    cost_basis: 14.20
+    cost_basis: 25.00
+    conviction: medium
+    earnings: "2026-05-04"
+  EOSE:
+    shares: 235
+    cost_basis: 13.07
+    conviction: low
+    earnings: null
+  ONDS:
+    shares: 100
+    cost_basis: 12.00
+    conviction: medium
+    earnings: null
+  TE:
+    shares: 100
+    cost_basis: 8.00
+    conviction: medium
+    earnings: null
+  HOOD:
+    shares: 100
+    cost_basis: 95.00
+    conviction: medium
+    earnings: "2026-04-29"
+  CIFR:
+    shares: 100
+    cost_basis: 19.00
+    conviction: medium
+    earnings: null
+  BMNU:
+    shares: 30
+    cost_basis: 4.00
+    conviction: low
+    earnings: null
 
 # Open option positions to track for close/roll signals
 # Add these as you open trades. The bot will also track via /positions command.

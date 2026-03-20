@@ -17,17 +17,76 @@ logger = logging.getLogger(__name__)
 # Global application reference for sending alerts outside command handlers
 _app: Application = None
 
+SEP = "\u2501" * 24  # ━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+def _vix_line(signal: dict) -> str:
+    """Build VIX display line with environment context."""
+    vix = signal.get("vix_level")
+    env = signal.get("vix_env", "unknown")
+    env_labels = {
+        "low_vol": "Low vol",
+        "normal": "Normal",
+        "elevated": "Elevated vol",
+        "high_fear": "High fear",
+    }
+    label = env_labels.get(env, env)
+    return f"VIX: {vix if vix else 'N/A'} ({label})"
+
+
+def _earnings_line(signal: dict) -> str:
+    """Build earnings display line."""
+    earnings = signal.get("earnings", {})
+    if earnings.get("earnings_date"):
+        days = earnings.get("days_until")
+        date = earnings["earnings_date"]
+        if days is not None:
+            return f"\U0001f4c5 Earnings: {date} ({days}d away)"
+        return f"\U0001f4c5 Earnings: {date}"
+    return "\U0001f4c5 Earnings: None in window \u2705"
+
+
+def _macd_label(trend: str) -> str:
+    """Format MACD trend label."""
+    if trend == "bullish":
+        return "\U0001f4c8 Bullish MACD"
+    return "\U0001f4c9 Bearish MACD"
+
+
+def _tags_line(tags: list) -> str:
+    """Format signal tags if present."""
+    if not tags:
+        return ""
+    return "\n".join(tags) + "\n"
+
 
 def format_csp_alert(signal: dict) -> str:
     """Format a CSP signal into a Telegram message."""
     direction = "\u2193" if signal["change_pct"] < 0 else "\u2191"
+    day_emoji = "\U0001f534" if signal["change_pct"] < 0 else "\U0001f7e2"
+    day_label = "Red day" if signal["change_pct"] < 0 else "Green day"
+
+    tags = _tags_line(signal.get("tags", []))
+    vix_note = f"\n{signal['vix_note']}" if signal.get("vix_note") else ""
+
     return (
         f"\U0001f534 CSP SIGNAL \u2014 {signal['ticker']}\n"
-        f"Price: ${signal['price']:.2f} ({direction} {abs(signal['change_pct']):.1f}% today)\n"
-        f"IVR: {signal['ivr']:.0f} | IV: {signal['iv']:.0f}%\n"
-        f"Setup: {signal['expiry']} ${signal['strike']:.2f}P\n"
+        f"{SEP}\n"
+        f"{tags}"
+        f"Price: ${signal['price']:.2f} ({direction} {abs(signal['change_pct']):.1f}% today) "
+        f"{day_emoji} {day_label} \u2705\n"
+        f"RSI: {signal['rsi_14']:.0f} | IVR: {signal['ivr']:.0f} | IV: {signal['iv']:.0f}%\n"
+        f"Trend: {_macd_label(signal['macd_trend'])}\n"
+        f"{_vix_line(signal)}{vix_note}\n"
+        f"20MA: ${signal['ma_20']:.2f} | 50MA: ${signal['ma_50']:.2f} | {signal['ma_position']}\n"
+        f"52W Low: ${signal['week52_low']:.2f} | 52W High: ${signal['week52_high']:.2f}\n"
+        f"{SEP}\n"
+        f"Setup: {signal['expiry']} ${signal['strike']:.2f}P (DTE: {signal['dte']})\n"
         f"Delta: {signal['delta']:.2f} | Premium: ${signal['premium']:.2f}\n"
         f"Yield: {signal['yield_pct']:.1f}% / {signal['dte']} days\n"
+        f"Breakeven: ${signal['breakeven']:.2f}\n"
+        f"{SEP}\n"
+        f"{_earnings_line(signal)}\n"
         f"Action: SELL TO OPEN 1x {signal['ticker']} {signal['expiry']} ${signal['strike']:.2f}P"
     )
 
@@ -35,14 +94,33 @@ def format_csp_alert(signal: dict) -> str:
 def format_cc_alert(signal: dict) -> str:
     """Format a CC signal into a Telegram message."""
     direction = "\u2191" if signal["change_pct"] > 0 else "\u2193"
+    pnl_if_called = signal.get("pnl_if_called", 0)
+    pnl_sign = "+" if pnl_if_called >= 0 else "-"
+    contracts = signal.get("shares", 100) // 100
+
+    tags = _tags_line(signal.get("tags", []))
+    vix_note = f"\n{signal['vix_note']}" if signal.get("vix_note") else ""
+
     return (
         f"\U0001f7e2 CC SIGNAL \u2014 {signal['ticker']}\n"
-        f"Price: ${signal['price']:.2f} ({direction} {abs(signal['change_pct']):.1f}% today)\n"
-        f"IVR: {signal['ivr']:.0f} | IV: {signal['iv']:.0f}%\n"
-        f"Setup: {signal['expiry']} ${signal['strike']:.2f}C\n"
+        f"{SEP}\n"
+        f"{tags}"
+        f"Price: ${signal['price']:.2f} ({direction} {abs(signal['change_pct']):.1f}% today) "
+        f"\U0001f7e2 Green day \u2705\n"
+        f"Cost basis: ${signal['cost_basis']:.2f} | "
+        f"P&L if called: {pnl_sign}${abs(pnl_if_called):,.2f}\n"
+        f"RSI: {signal['rsi_14']:.0f} | IVR: {signal['ivr']:.0f} | IV: {signal['iv']:.0f}%\n"
+        f"Trend: {_macd_label(signal['macd_trend'])}\n"
+        f"{_vix_line(signal)}{vix_note}\n"
+        f"20MA: ${signal['ma_20']:.2f} | 50MA: ${signal['ma_50']:.2f}\n"
+        f"{SEP}\n"
+        f"Setup: {signal['expiry']} ${signal['strike']:.2f}C (DTE: {signal['dte']})\n"
         f"Delta: {signal['delta']:.2f} | Premium: ${signal['premium']:.2f}\n"
         f"Yield: {signal['yield_pct']:.1f}% / {signal['dte']} days\n"
-        f"Action: SELL TO OPEN 1x {signal['ticker']} {signal['expiry']} ${signal['strike']:.2f}C"
+        f"Strike vs basis: ${signal['strike']:.2f} > ${signal['cost_basis']:.2f} \u2705 Safe\n"
+        f"{SEP}\n"
+        f"{_earnings_line(signal)}\n"
+        f"Action: SELL TO OPEN {contracts}x {signal['ticker']} {signal['expiry']} ${signal['strike']:.2f}C"
     )
 
 
@@ -62,7 +140,7 @@ async def send_alert(message: str):
     """Send a message to the configured Telegram chat."""
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
     if not chat_id or not _app:
-        logger.warning("Telegram not configured — skipping alert")
+        logger.warning("Telegram not configured \u2014 skipping alert")
         return
 
     try:

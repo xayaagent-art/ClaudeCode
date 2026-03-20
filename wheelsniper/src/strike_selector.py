@@ -84,11 +84,13 @@ def select_put_strike(
 def select_call_strike(
     calls: pd.DataFrame,
     price: float,
-    delta_max: float = 0.20,
+    delta_max: float = 0.35,
+    delta_min: float = 0.25,
 ) -> Optional[dict]:
-    """Select the best call strike for a CC at or below the delta target.
+    """Select the best call strike for a CC within a delta range.
 
-    Picks the OTM call with delta closest to but not exceeding delta_max.
+    Picks the OTM call with delta between delta_min and delta_max,
+    choosing the strike closest to the midpoint of the range.
     """
     if calls.empty:
         return None
@@ -107,15 +109,20 @@ def select_call_strike(
         df["abs_delta"] = df["delta"].abs()
         delta_col = "abs_delta"
 
-    # Filter for delta <= max
-    filtered = df[df[delta_col] <= delta_max]
+    # Filter for delta within range
+    filtered = df[(df[delta_col] >= delta_min) & (df[delta_col] <= delta_max)]
 
     if filtered.empty:
-        # Pick the lowest delta available (most OTM)
-        best = df.loc[df[delta_col].idxmin()]
+        # Fall back to closest strike to target delta midpoint
+        target = (delta_min + delta_max) / 2
+        df["delta_dist"] = abs(df[delta_col] - target)
+        best = df.loc[df["delta_dist"].idxmin()]
     else:
-        # Pick the highest delta within the limit (most premium)
-        best = filtered.loc[filtered[delta_col].idxmax()]
+        # Pick strike closest to the delta midpoint
+        target = (delta_min + delta_max) / 2
+        filtered = filtered.copy()
+        filtered["delta_dist"] = abs(filtered[delta_col] - target)
+        best = filtered.loc[filtered["delta_dist"].idxmin()]
 
     premium = _get_premium(best)
 
