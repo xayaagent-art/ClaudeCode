@@ -44,6 +44,72 @@ def _get_vix_note(vix_level: Optional[float], vix_env: str) -> Optional[str]:
     return None
 
 
+# --- Conviction-based CC parameters ---
+
+CC_CONVICTION_RULES = {
+    "aggressive_exit": {
+        "delta_min": 0.40,
+        "delta_max": 0.55,
+        "rsi_min": None,       # No RSI requirement
+        "cost_basis_check": False,
+        "tag": "\U0001f534 AGGRESSIVE EXIT \u2014 selling near ATM",
+        "goal": "Goal: exit position ASAP via assignment",
+        "skip_otm_filter": True,
+    },
+    "exit_efficient": {
+        "delta_min": 0.30,
+        "delta_max": 0.40,
+        "rsi_min": 50,
+        "cost_basis_check": True,
+        "tag": "\U0001f7e0 EFFICIENT EXIT \u2014 targeting assignment",
+        "goal": "Goal: exit within 2-3 cycles",
+        "skip_otm_filter": False,
+    },
+    "medium": {
+        "delta_min": 0.25,
+        "delta_max": 0.35,
+        "rsi_min": 55,
+        "cost_basis_check": True,
+        "tag": "\U0001f7e1 Standard CC",
+        "goal": None,
+        "skip_otm_filter": False,
+    },
+    "high": {
+        "delta_min": 0.15,
+        "delta_max": 0.25,
+        "rsi_min": 60,
+        "cost_basis_check": True,
+        "tag": "\U0001f7e2 Conservative CC \u2014 protecting upside",
+        "goal": None,
+        "skip_otm_filter": False,
+    },
+}
+
+
+def _calc_roi(premium: float, strike: float, dte: int) -> dict:
+    """Calculate cycle and annualized ROI with yield flag."""
+    if strike <= 0 or dte <= 0:
+        return {"cycle_roi": 0, "annualized_roi": 0, "yield_flag": ""}
+
+    cycle_roi = round((premium / strike) * 100, 2)
+    annualized_roi = round((cycle_roi / dte) * 365, 1)
+
+    if cycle_roi >= 6:
+        yield_flag = "\U0001f680 Exceptional yield"
+    elif cycle_roi >= 4:
+        yield_flag = "\U0001f4b0 High yield"
+    elif cycle_roi >= 2:
+        yield_flag = "\u2705 Good yield"
+    else:
+        yield_flag = ""
+
+    return {
+        "cycle_roi": cycle_roi,
+        "annualized_roi": annualized_roi,
+        "yield_flag": yield_flag,
+    }
+
+
 def _get_time_weighted_target(days_held: int, dte: int) -> int:
     """Return the profit % target based on how long the position has been held.
 
@@ -156,23 +222,29 @@ def evaluate_csp(ticker: str, params: dict) -> Optional[dict]:
         logger.info(f"Skipping {ticker} CSP \u2014 earnings in {earnings['days_until']} days")
         return None
 
-    # 6. Get options chain (DTE 21-45)
-    dte_min = params.get("dte_min", 21)
-    dte_max = params.get("dte_max", 45)
-    chain = get_options_chain(ticker, dte_min, dte_max)
+    # 6. Get options chain (DTE target-based selection)
+    dte_target = params.get("csp_dte_target", 35)
+    dte_min = params.get("csp_dte_min", params.get("dte_min", 30))
+    dte_max = params.get("csp_dte_max", params.get("dte_max", 45))
+    chain = get_options_chain(ticker, dte_min, dte_max, dte_target=dte_target)
     if not chain:
         return None
 
-    # 7. Select strike (delta 0.20-0.30)
+    # 7. Select strike (delta 0.20-0.30) with liquidity filter
     delta_min = params.get("csp_delta_min", 0.20)
     delta_max = params.get("csp_delta_max", 0.30)
-    strike = select_put_strike(chain["puts"], data["price"], delta_min, delta_max)
+    strike = select_put_strike(chain["puts"], data["price"], delta_min, delta_max, ticker=ticker)
     if not strike:
         return None
 
     # 5. Premium yield >= 1.5%
     yield_info = calculate_yield(strike["premium"], strike["strike"], chain["days_to_expiry"])
     if yield_info["yield_pct"] < 1.5:
+        return None
+
+    # ROI hard block: CSP cycle_roi >= 2.0%
+    roi = _calc_roi(strike["premium"], strike["strike"], chain["days_to_expiry"])
+    if roi["cycle_roi"] < 2.0:
         return None
 
     breakeven = round(strike["strike"] - strike["premium"], 2)
@@ -207,6 +279,14 @@ def evaluate_csp(ticker: str, params: dict) -> Optional[dict]:
 
     # VIX overlay
     vix_note = _get_vix_note(data["vix_level"], data["vix_env"])
+
+    # Liquidity warning
+    if strike.get("low_liquidity"):
+        tags.append("\u26a0\ufe0f Low liquidity \u2014 check spread before trading")
+
+    # Yield flag
+    if roi["yield_flag"]:
+        tags.append(roi["yield_flag"])
 
     return {
         "type": "CSP",
@@ -246,6 +326,9 @@ def evaluate_csp(ticker: str, params: dict) -> Optional[dict]:
         "ask": strike["ask"],
         "yield_pct": yield_info["yield_pct"],
         "annualized_yield": yield_info["annualized_yield"],
+        "cycle_roi": roi["cycle_roi"],
+        "annualized_roi": roi["annualized_roi"],
+        "yield_flag": roi["yield_flag"],
         "breakeven": breakeven,
         "earnings": earnings,
         "tags": tags,
@@ -255,8 +338,11 @@ def evaluate_csp(ticker: str, params: dict) -> Optional[dict]:
 def evaluate_cc(ticker: str, position: dict, params: dict) -> Optional[dict]:
     """Evaluate a single assigned position for CC signal.
 
-    Phase 2A filters + Phase 2B Bollinger/key level/VWAP enhancements.
-    EOSE special rule: delta 0.35-0.45, skip RSI check, recovery tag.
+    Conviction-based CC rules:
+    - aggressive_exit: delta 0.40-0.55, no RSI, no cost basis check
+    - exit_efficient: delta 0.30-0.40, RSI>50
+    - medium: delta 0.25-0.35, RSI>55
+    - high: delta 0.15-0.25, RSI>60
     """
     data = get_market_data(ticker)
     if not data:
@@ -268,19 +354,27 @@ def evaluate_cc(ticker: str, position: dict, params: dict) -> Optional[dict]:
 
     tags = []
     conviction = position.get("conviction", "medium")
-    is_eose = ticker == "EOSE"
+    rules = CC_CONVICTION_RULES.get(conviction, CC_CONVICTION_RULES["medium"])
 
-    # 1. Green day
+    # 1. Green day (required for all conviction levels)
     if data["change_pct"] <= 0:
         return None
 
-    # 2. RSI > 60 (EOSE: skip RSI check)
-    if not is_eose:
-        if data["rsi_14"] is not None and data["rsi_14"] <= 60:
+    # 2. RSI check based on conviction
+    rsi_min = rules["rsi_min"]
+    if rsi_min is not None:
+        if data["rsi_14"] is not None and data["rsi_14"] <= rsi_min:
             return None
 
-    if is_eose:
-        tags.append("\u26aa Recovery mode \u2014 aggressive CC to lower basis")
+    # Add conviction tag
+    tags.append(rules["tag"])
+    if rules["goal"]:
+        tags.append(rules["goal"])
+
+    # Exit note from config
+    exit_note = position.get("exit_note")
+    if exit_note and position.get("exit_mode"):
+        tags.append(f"\U0001f4dd {exit_note}")
 
     # 7. Earnings blackout (10 days hard block)
     earnings_days = params.get("earnings_blackout_days", 10)
@@ -289,32 +383,37 @@ def evaluate_cc(ticker: str, position: dict, params: dict) -> Optional[dict]:
         logger.info(f"Skipping {ticker} CC \u2014 earnings in {earnings['days_until']} days")
         return None
 
-    # 5. Get options chain (DTE 21-35)
-    cc_dte_min = params.get("cc_dte_min", params.get("dte_min", 21))
+    # 5. Get options chain (DTE target-based selection)
+    cc_dte_target = params.get("cc_dte_target", 28)
+    cc_dte_min = params.get("cc_dte_min", 21)
     cc_dte_max = params.get("cc_dte_max", 35)
-    chain = get_options_chain(ticker, cc_dte_min, cc_dte_max)
+    chain = get_options_chain(ticker, cc_dte_min, cc_dte_max, dte_target=cc_dte_target)
     if not chain:
         return None
 
-    # 6. Select strike — EOSE aggressive, others standard
-    if is_eose:
-        cc_delta_min = 0.35
-        cc_delta_max = 0.45
-    else:
-        cc_delta_min = params.get("cc_delta_min", 0.25)
-        cc_delta_max = params.get("cc_delta_max", 0.35)
+    # 6. Select strike based on conviction delta range
+    cc_delta_min = rules["delta_min"]
+    cc_delta_max = rules["delta_max"]
 
-    strike = select_call_strike(chain["calls"], data["price"], cc_delta_max, cc_delta_min)
+    strike = select_call_strike(
+        chain["calls"], data["price"], cc_delta_max, cc_delta_min,
+        ticker=ticker, skip_otm_filter=rules["skip_otm_filter"],
+    )
     if not strike:
         return None
 
-    # 4. Strike must be above cost basis
+    # 4. Strike must be above cost basis (unless aggressive exit)
     cost_basis = position.get("cost_basis", data["price"])
-    if strike["strike"] <= cost_basis:
+    if rules["cost_basis_check"] and strike["strike"] <= cost_basis:
         return None
 
     yield_info = calculate_yield(strike["premium"], cost_basis, chain["days_to_expiry"])
     pnl_if_called = round((strike["strike"] - cost_basis) * position.get("shares", 100) + strike["premium"] * 100, 2)
+
+    # ROI hard block: CC cycle_roi >= 1.5%
+    roi = _calc_roi(strike["premium"], strike["strike"], chain["days_to_expiry"])
+    if roi["cycle_roi"] < 1.5:
+        return None
 
     # --- Phase 2B: Key levels ---
     levels = get_key_levels(
@@ -354,6 +453,14 @@ def evaluate_cc(ticker: str, position: dict, params: dict) -> Optional[dict]:
     # VIX overlay
     vix_note = _get_vix_note(data["vix_level"], data["vix_env"])
 
+    # Liquidity warning
+    if strike.get("low_liquidity"):
+        tags.append("\u26a0\ufe0f Low liquidity \u2014 check spread before trading")
+
+    # Yield flag
+    if roi["yield_flag"]:
+        tags.append(roi["yield_flag"])
+
     return {
         "type": "CC",
         "ticker": ticker,
@@ -391,10 +498,14 @@ def evaluate_cc(ticker: str, position: dict, params: dict) -> Optional[dict]:
         "ask": strike["ask"],
         "yield_pct": yield_info["yield_pct"],
         "annualized_yield": yield_info["annualized_yield"],
+        "cycle_roi": roi["cycle_roi"],
+        "annualized_roi": roi["annualized_roi"],
+        "yield_flag": roi["yield_flag"],
         "shares": position.get("shares", 100),
         "cost_basis": cost_basis,
         "pnl_if_called": pnl_if_called,
         "conviction": conviction,
+        "exit_mode": position.get("exit_mode", False),
         "earnings": earnings,
         "tags": tags,
     }

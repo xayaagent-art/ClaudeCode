@@ -150,6 +150,22 @@ def _cc_key_levels_block(signal: dict) -> str:
     return "\n".join(lines)
 
 
+def _strike_vs_basis_line(signal: dict) -> str:
+    """Build strike vs cost basis line, adjusted for exit mode."""
+    strike = signal["strike"]
+    basis = signal["cost_basis"]
+    conviction = signal.get("conviction", "medium")
+
+    if conviction == "aggressive_exit":
+        return f"Strike: ${strike:.2f} | Basis: ${basis:.2f} \U0001f534 EXIT MODE"
+    elif conviction == "exit_efficient":
+        return f"Strike: ${strike:.2f} vs basis ${basis:.2f} \U0001f7e0 EXIT"
+    elif strike > basis:
+        return f"Strike vs basis: ${strike:.2f} > ${basis:.2f} \u2705 Safe"
+    else:
+        return f"Strike vs basis: ${strike:.2f} <= ${basis:.2f} \u26a0\ufe0f Below basis"
+
+
 def _tags_block(tags: list) -> str:
     """Format signal tags as a block."""
     if not tags:
@@ -188,7 +204,9 @@ def format_csp_alert(signal: dict) -> str:
         f"{SEP}\n"
         f"Setup: {signal['expiry']} ${signal['strike']:.2f}P (DTE: {signal['dte']})\n"
         f"Delta: {signal['delta']:.2f} | Premium: ${signal['premium']:.2f}\n"
-        f"Yield: {signal['yield_pct']:.1f}% / {signal['dte']} days\n"
+        f"Yield: {signal.get('cycle_roi', signal['yield_pct']):.1f}% / {signal['dte']} days | "
+        f"Ann: ~{signal.get('annualized_roi', signal['annualized_yield']):.0f}% "
+        f"{signal.get('yield_flag', '')}\n"
         f"Breakeven: ${signal['breakeven']:.2f}\n"
         f"{SEP}\n"
         f"{_earnings_line(signal)}\n"
@@ -230,8 +248,10 @@ def format_cc_alert(signal: dict) -> str:
         f"{SEP}\n"
         f"Setup: {signal['expiry']} ${signal['strike']:.2f}C (DTE: {signal['dte']})\n"
         f"Delta: {signal['delta']:.2f} | Premium: ${signal['premium']:.2f}\n"
-        f"Yield: {signal['yield_pct']:.1f}% / {signal['dte']} days\n"
-        f"Strike vs basis: ${signal['strike']:.2f} > ${signal['cost_basis']:.2f} \u2705 Safe\n"
+        f"Yield: {signal.get('cycle_roi', signal['yield_pct']):.1f}% / {signal['dte']} days | "
+        f"Ann: ~{signal.get('annualized_roi', signal['annualized_yield']):.0f}% "
+        f"{signal.get('yield_flag', '')}\n"
+        f"{_strike_vs_basis_line(signal)}\n"
         f"{SEP}\n"
         f"{_earnings_line(signal)}\n"
         f"Action: SELL TO OPEN {contracts}x {signal['ticker']} {signal['expiry']} ${signal['strike']:.2f}C"
