@@ -2,7 +2,7 @@
 market_data.py — Live market data via yfinance.
 
 Fetches current price, daily % change, options chains, implied volatility,
-and technical indicators (RSI, MACD, MAs, 52W range, VIX).
+and technical indicators (RSI, MACD, MAs, Bollinger Bands, VWAP, 52W range, VIX).
 """
 
 import logging
@@ -59,9 +59,8 @@ def get_stock_snapshot(ticker: str) -> Optional[dict]:
 def get_market_data(ticker: str) -> Optional[dict]:
     """Fetch comprehensive market data including all technical indicators.
 
-    Returns dict with: price, change_pct, ma_20, ma_50, ma_position,
-    rsi_14, macd_line, signal_line, macd_histogram, macd_trend,
-    week52_high, week52_low, pct_from_52w_low, vix_level, vix_env
+    Returns dict with all technical indicators including Bollinger Bands,
+    RSI divergence, VWAP, and VIX overlay.
     """
     try:
         stock = yf.Ticker(ticker)
@@ -87,14 +86,23 @@ def get_market_data(ticker: str) -> Optional[dict]:
         # RSI (14-period, Wilder smoothing)
         rsi_14 = _calc_rsi(closes, period=14)
 
+        # RSI divergence (5-day lookback)
+        rsi_divergence = _calc_rsi_divergence(closes, period=14, lookback=5)
+
         # MACD (12/26/9)
         macd_line, signal_line, macd_histogram = _calc_macd(closes)
         macd_trend = "bullish" if macd_line is not None and signal_line is not None and macd_line > signal_line else "bearish"
+
+        # Bollinger Bands (20-period, 2 std dev)
+        bb_upper, bb_lower, bb_width, bb_pct_b, bb_position = _calc_bollinger_bands(closes, price)
 
         # 52-week range
         week52_high = float(closes.max())
         week52_low = float(closes.min())
         pct_from_52w_low = ((price - week52_low) / week52_low * 100) if week52_low > 0 else 0
+
+        # VWAP (daily, from intraday data)
+        vwap, vwap_position = _calc_vwap(ticker, price)
 
         # VIX
         vix_level, vix_env = get_vix()
@@ -111,15 +119,25 @@ def get_market_data(ticker: str) -> Optional[dict]:
             "ma_position": ma_position,
             # RSI
             "rsi_14": round(rsi_14, 1) if rsi_14 is not None else None,
+            "rsi_divergence": rsi_divergence,
             # MACD
             "macd_line": round(macd_line, 4) if macd_line is not None else None,
             "signal_line": round(signal_line, 4) if signal_line is not None else None,
             "macd_histogram": round(macd_histogram, 4) if macd_histogram is not None else None,
             "macd_trend": macd_trend,
+            # Bollinger Bands
+            "bb_upper": bb_upper,
+            "bb_lower": bb_lower,
+            "bb_width": bb_width,
+            "bb_pct_b": bb_pct_b,
+            "bb_position": bb_position,
             # 52-week range
             "week52_high": round(week52_high, 2),
             "week52_low": round(week52_low, 2),
             "pct_from_52w_low": round(pct_from_52w_low, 1),
+            # VWAP
+            "vwap": vwap,
+            "vwap_position": vwap_position,
             # VIX
             "vix_level": vix_level,
             "vix_env": vix_env,
@@ -181,6 +199,116 @@ def _calc_ma_position(price: float, ma_20: Optional[float], ma_50: Optional[floa
     if price < ma_20 and price < ma_50:
         return "below_both"
     return "between"
+
+
+def _calc_bollinger_bands(
+    closes: pd.Series,
+    price: float,
+    period: int = 20,
+    num_std: float = 2.0,
+) -> tuple[Optional[float], Optional[float], Optional[float], Optional[float], str]:
+    """Calculate Bollinger Bands (20-period, 2 std dev).
+
+    Returns: (bb_upper, bb_lower, bb_width, bb_pct_b, bb_position)
+    """
+    if len(closes) < period:
+        return None, None, None, None, "unknown"
+
+    sma = float(closes.tail(period).mean())
+    std = float(closes.tail(period).std())
+
+    upper = round(sma + num_std * std, 2)
+    lower = round(sma - num_std * std, 2)
+    width = round((upper - lower) / sma, 4) if sma > 0 else 0
+    pct_b = round((price - lower) / (upper - lower), 3) if (upper - lower) > 0 else 0.5
+
+    if pct_b < 0.15:
+        position = "at_lower"
+    elif pct_b > 0.85:
+        position = "at_upper"
+    else:
+        position = "middle"
+
+    return upper, lower, width, pct_b, position
+
+
+def _calc_rsi_divergence(closes: pd.Series, period: int = 14, lookback: int = 5) -> str:
+    """Detect basic RSI divergence over the last `lookback` days.
+
+    - Bullish divergence: price making lower lows, RSI making higher lows
+    - Bearish divergence: price making higher highs, RSI making lower highs
+    """
+    if len(closes) < period + lookback + 1:
+        return "none"
+
+    # Calculate RSI series for the lookback window
+    rsi_series = _calc_rsi_series(closes, period)
+    if rsi_series is None or len(rsi_series) < lookback:
+        return "none"
+
+    recent_prices = closes.iloc[-lookback:]
+    recent_rsi = rsi_series.iloc[-lookback:]
+
+    price_start = float(recent_prices.iloc[0])
+    price_end = float(recent_prices.iloc[-1])
+    rsi_start = float(recent_rsi.iloc[0])
+    rsi_end = float(recent_rsi.iloc[-1])
+
+    price_lower_low = price_end < price_start
+    rsi_higher_low = rsi_end > rsi_start
+
+    price_higher_high = price_end > price_start
+    rsi_lower_high = rsi_end < rsi_start
+
+    if price_lower_low and rsi_higher_low:
+        return "bullish_divergence"
+    if price_higher_high and rsi_lower_high:
+        return "bearish_divergence"
+    return "none"
+
+
+def _calc_rsi_series(closes: pd.Series, period: int = 14) -> Optional[pd.Series]:
+    """Calculate a full RSI series (for divergence detection)."""
+    if len(closes) < period + 1:
+        return None
+
+    delta = closes.diff()
+    gain = delta.where(delta > 0, 0.0)
+    loss = (-delta).where(delta < 0, 0.0)
+
+    avg_gain = gain.rolling(window=period, min_periods=period).mean()
+    avg_loss = loss.rolling(window=period, min_periods=period).mean()
+
+    # Wilder smoothing after initial SMA
+    for i in range(period + 1, len(closes)):
+        avg_gain.iloc[i] = (avg_gain.iloc[i - 1] * (period - 1) + gain.iloc[i]) / period
+        avg_loss.iloc[i] = (avg_loss.iloc[i - 1] * (period - 1) + loss.iloc[i]) / period
+
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi.dropna()
+
+
+def _calc_vwap(ticker: str, current_price: float) -> tuple[Optional[float], str]:
+    """Calculate daily VWAP from intraday 1-hour bars.
+
+    Returns: (vwap, vwap_position)
+    """
+    try:
+        stock = yf.Ticker(ticker)
+        intraday = stock.history(period="1d", interval="1h")
+        if intraday.empty or len(intraday) < 2:
+            return None, "unknown"
+
+        typical_price = (intraday["High"] + intraday["Low"] + intraday["Close"]) / 3
+        vwap = float((typical_price * intraday["Volume"]).sum() / intraday["Volume"].sum())
+        vwap = round(vwap, 2)
+
+        position = "above" if current_price > vwap else "below"
+        return vwap, position
+    except Exception as e:
+        logger.debug(f"Could not calculate VWAP for {ticker}: {e}")
+        return None, "unknown"
 
 
 def get_vix() -> tuple[Optional[float], str]:
