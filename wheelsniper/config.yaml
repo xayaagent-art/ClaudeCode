@@ -48,27 +48,21 @@ watchlist:
   - ASTS
   - APLD
   - NBIS
-  - EOSE
-  - SOFI
   - HIMS
   - RKLB
   - HOOD
   - CIFR
   - CRWV
-  - BMNU
   - ONDS
   - TE
+  - AXT
 
 # Assigned positions — tickers where you hold 100+ shares and can sell CCs
 # Update shares and cost_basis as your positions change.
 positions:
-  # Example:
-  # SOFI:
-  #   shares: 100
-  #   cost_basis: 8.50
-  # HIMS:
-  #   shares: 200
-  #   cost_basis: 12.30
+  SOFI:
+    shares: 100
+    cost_basis: 14.20
 
 # Open option positions to track for close/roll signals
 # Add these as you open trades. The bot will also track via /positions command.
