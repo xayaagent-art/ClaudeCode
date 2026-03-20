@@ -3,6 +3,7 @@ market_data.py — Live market data via yfinance.
 
 Fetches current price, daily % change, options chains, implied volatility,
 and technical indicators (RSI, MACD, MAs, Bollinger Bands, VWAP, 52W range, VIX).
+Includes pre-market data for early scanning.
 """
 
 import logging
@@ -11,13 +12,20 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
+import pytz
 import yfinance as yf
 
 logger = logging.getLogger(__name__)
 
+ET = pytz.timezone("US/Eastern")
+
 # Cache VIX for the duration of a scan cycle to avoid redundant fetches
 _vix_cache: dict = {"value": None, "timestamp": None}
 _VIX_CACHE_SECONDS = 120
+
+# Cache pre-market data for 5 minutes
+_premarket_cache: dict = {}
+_PREMARKET_CACHE_SECONDS = 300
 
 
 def get_stock_snapshot(ticker: str) -> Optional[dict]:
@@ -53,6 +61,98 @@ def get_stock_snapshot(ticker: str) -> Optional[dict]:
         }
     except Exception as e:
         logger.error(f"Error fetching snapshot for {ticker}: {e}")
+        return None
+
+
+def get_premarket_data(ticker: str) -> Optional[dict]:
+    """Fetch pre-market price and change data for a ticker.
+
+    Uses yfinance 2-day 1-minute bars to get pre-market trading data
+    (4:00 AM - 9:30 AM ET). Returns None if unavailable.
+    """
+    global _premarket_cache
+
+    # Check cache
+    now = datetime.now()
+    cached = _premarket_cache.get(ticker)
+    if cached and (now - cached["_cached_at"]).total_seconds() < _PREMARKET_CACHE_SECONDS:
+        return {k: v for k, v in cached.items() if k != "_cached_at"}
+
+    try:
+        stock = yf.Ticker(ticker)
+
+        # Fetch 2 days of 1-minute bars (includes pre-market with prepost=True)
+        hist = stock.history(period="2d", interval="1m", prepost=True)
+        if hist.empty:
+            return None
+
+        # Get yesterday's close (last regular-hours bar from previous day)
+        daily = stock.history(period="5d")
+        if daily.empty or len(daily) < 2:
+            return None
+        prev_close = float(daily["Close"].iloc[-1])
+
+        # Calculate average daily volume for comparison
+        avg_volume = float(daily["Volume"].mean()) if not daily.empty else 1
+
+        # Filter for today's pre-market bars (4:00 AM - 9:30 AM ET)
+        now_et = datetime.now(ET)
+        today = now_et.date()
+
+        # Convert index to ET for filtering
+        if hist.index.tz is None:
+            hist.index = hist.index.tz_localize("UTC").tz_convert(ET)
+        else:
+            hist.index = hist.index.tz_convert(ET)
+
+        premarket_start = ET.localize(datetime.combine(today, datetime.min.time()).replace(hour=4, minute=0))
+        premarket_end = ET.localize(datetime.combine(today, datetime.min.time()).replace(hour=9, minute=30))
+
+        pm_bars = hist[(hist.index >= premarket_start) & (hist.index < premarket_end)]
+
+        if pm_bars.empty:
+            return None
+
+        premarket_price = round(float(pm_bars["Close"].iloc[-1]), 2)
+        premarket_volume = int(pm_bars["Volume"].sum())
+        premarket_change_pct = round(((premarket_price - prev_close) / prev_close) * 100, 2)
+        premarket_vs_avg = round(premarket_volume / max(avg_volume, 1), 2)
+
+        # Direction
+        if premarket_change_pct > 0.5:
+            direction = "up"
+        elif premarket_change_pct < -0.5:
+            direction = "down"
+        else:
+            direction = "flat"
+
+        # Signal classification
+        if premarket_change_pct < -8:
+            signal = "avoid"
+        elif premarket_change_pct < -2:
+            signal = "strong_csp"
+        elif premarket_change_pct > 2:
+            signal = "strong_cc"
+        else:
+            signal = "watch"
+
+        result = {
+            "ticker": ticker,
+            "premarket_price": premarket_price,
+            "prev_close": prev_close,
+            "premarket_change_pct": premarket_change_pct,
+            "premarket_volume": premarket_volume,
+            "premarket_vs_avg": premarket_vs_avg,
+            "premarket_direction": direction,
+            "premarket_signal": signal,
+        }
+
+        # Cache it
+        _premarket_cache[ticker] = {**result, "_cached_at": now}
+        return result
+
+    except Exception as e:
+        logger.debug(f"Pre-market data unavailable for {ticker}: {e}")
         return None
 
 
