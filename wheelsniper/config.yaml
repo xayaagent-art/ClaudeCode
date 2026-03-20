@@ -1,0 +1,76 @@
+# WheelSniper Bot Configuration
+# Edit this file to manage your watchlist and positions without touching code.
+
+# Monthly income target range
+monthly_target:
+  low: 3500
+  high: 4000
+
+# Signal parameters
+signal_params:
+  # IVR threshold for CSP signals
+  ivr_min: 30
+  # Delta range for CSP strikes
+  csp_delta_min: 0.20
+  csp_delta_max: 0.30
+  # Max delta for CC strikes
+  cc_delta_max: 0.20
+  # DTE window for new positions
+  dte_min: 21
+  dte_max: 35
+  # Close at this % of max profit
+  close_profit_pct: 50
+  # Close if within this many DTE with < close_dte_profit_pct remaining
+  close_dte_threshold: 7
+  close_dte_profit_pct: 25
+  # Skip tickers with earnings within this many days
+  earnings_blackout_days: 7
+  # 20-day MA proximity threshold (% distance from MA to count as "near support")
+  ma_support_pct: 3.0
+  # 50-day MA proximity threshold for CC resistance
+  ma_resistance_pct: 3.0
+
+# Alert deduplication window in hours
+alert_dedup_hours: 4
+
+# Polling interval in minutes during market hours
+poll_interval_minutes: 5
+
+# Market hours (Eastern Time)
+market_hours:
+  open: "09:35"
+  close: "15:55"
+  morning_brief: "09:30"
+
+# Watchlist — tickers to monitor for CSP opportunities
+watchlist:
+  - IREN
+  - ASTS
+  - APLD
+  - NBIS
+  - HIMS
+  - RKLB
+  - HOOD
+  - CIFR
+  - CRWV
+  - ONDS
+  - TE
+  - AXT
+
+# Assigned positions — tickers where you hold 100+ shares and can sell CCs
+# Update shares and cost_basis as your positions change.
+positions:
+  SOFI:
+    shares: 100
+    cost_basis: 14.20
+
+# Open option positions to track for close/roll signals
+# Add these as you open trades. The bot will also track via /positions command.
+# open_trades:
+#   - ticker: SOFI
+#     type: CSP          # CSP or CC
+#     strike: 7.00
+#     expiry: "2026-04-17"
+#     premium: 0.45
+#     quantity: 1
+#     opened_date: "2026-03-20"
