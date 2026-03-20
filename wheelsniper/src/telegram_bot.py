@@ -294,6 +294,90 @@ def format_close_alert(signal: dict, monthly_total: float = 0, monthly_target: i
     )
 
 
+def format_premarket_alert(
+    date_str: str,
+    spy_data: dict,
+    qqq_data: dict,
+    vix_level: float,
+    movers_down: list[dict],
+    movers_up: list[dict],
+    avoid_list: list[dict],
+) -> str:
+    """Format the 8:00 AM pre-market scan alert."""
+    spy_dir = "+" if spy_data and spy_data.get("premarket_change_pct", 0) >= 0 else ""
+    qqq_dir = "+" if qqq_data and qqq_data.get("premarket_change_pct", 0) >= 0 else ""
+
+    lines = [
+        f"\U0001f304 Pre-Market Scan \u2014 {date_str} 8:00 AM ET",
+        SEP,
+    ]
+
+    # Market indices
+    if spy_data:
+        lines.append(
+            f"SPY pre-market: ${spy_data['premarket_price']:.2f} "
+            f"({spy_dir}{spy_data['premarket_change_pct']:.1f}%)"
+        )
+    if qqq_data:
+        lines.append(
+            f"QQQ pre-market: ${qqq_data['premarket_price']:.2f} "
+            f"({qqq_dir}{qqq_data['premarket_change_pct']:.1f}%)"
+        )
+    if vix_level:
+        lines.append(f"VIX: {vix_level:.2f}")
+    lines.append(SEP)
+
+    # Movers down (CSP watch)
+    if movers_down:
+        lines.append("\U0001f4c9 MOVERS DOWN (CSP watch):")
+        for m in movers_down:
+            lines.append(
+                f"\U0001f534 {m['ticker']} \u2193 {abs(m['premarket_change_pct']):.1f}% pre-mkt | "
+                f"{_premarket_note(m)}"
+            )
+        lines.append(SEP)
+
+    # Movers up (CC watch)
+    if movers_up:
+        lines.append("\U0001f4c8 MOVERS UP (CC watch):")
+        for m in movers_up:
+            lines.append(
+                f"\U0001f7e2 {m['ticker']} \u2191 {m['premarket_change_pct']:.1f}% pre-mkt | "
+                f"{_premarket_note(m)}"
+            )
+        lines.append(SEP)
+
+    # Avoid list
+    if avoid_list:
+        lines.append("\u26a0\ufe0f AVOID TODAY:")
+        for a in avoid_list:
+            lines.append(
+                f"{a['ticker']} \u2193 {abs(a['premarket_change_pct']):.1f}% \u2014 "
+                f"unusual move, check news first"
+            )
+        lines.append(SEP)
+
+    if not movers_down and not movers_up and not avoid_list:
+        lines.append("\U0001f4ca Quiet pre-market \u2014 no major movers")
+        lines.append(SEP)
+
+    lines.append("Full morning brief with setups: 9:30 AM")
+
+    return "\n".join(lines)
+
+
+def _premarket_note(mover: dict) -> str:
+    """Generate a note for a pre-market mover."""
+    signal = mover.get("premarket_signal", "watch")
+    if signal == "strong_csp":
+        return "IV likely spiking"
+    elif signal == "strong_cc":
+        return "CC entry on open"
+    elif signal == "avoid":
+        return "unusual move, check news"
+    return "Watch for entry"
+
+
 async def send_alert(message: str):
     """Send a message to the configured Telegram chat."""
     chat_id = os.getenv("TELEGRAM_CHAT_ID")

@@ -21,7 +21,7 @@ import yaml
 from src.earnings_filter import has_upcoming_earnings
 from src.iv_calculator import calculate_ivr
 from src.key_levels import get_key_levels
-from src.market_data import get_market_data, get_options_chain, get_vix
+from src.market_data import get_market_data, get_options_chain, get_premarket_data, get_vix
 from src.strike_selector import calculate_yield, select_call_strike, select_put_strike
 
 logger = logging.getLogger(__name__)
@@ -194,6 +194,19 @@ def evaluate_csp(ticker: str, params: dict) -> Optional[dict]:
     ivr = ivr_data["ivr"]
     tags = []
 
+    # Pre-market boost (active during first scan at 9:35 AM)
+    pm_data = get_premarket_data(ticker)
+    pm_signal = pm_data["premarket_signal"] if pm_data else "watch"
+
+    # Block if large pre-market move (news risk)
+    if pm_signal == "avoid":
+        logger.info(f"{ticker} blocked — large pre-market move, verify news")
+        return None
+
+    pm_csp_boost = pm_signal == "strong_csp"
+    if pm_csp_boost:
+        tags.append("\u26a1 Pre-market dip \u2014 elevated IV expected")
+
     # 1. Red day check — IVR > 70 overrides
     is_red = data["change_pct"] < 0
     if not is_red:
@@ -202,9 +215,10 @@ def evaluate_csp(ticker: str, params: dict) -> Optional[dict]:
         else:
             return None
 
-    # 2. RSI < 40 — IVR > 65 overrides
+    # 2. RSI < 40 — IVR > 65 overrides, pre-market boost relaxes to < 50
+    rsi_threshold = 50 if pm_csp_boost else 40
     if data["rsi_14"] is not None:
-        if data["rsi_14"] >= 40 and ivr <= 65:
+        if data["rsi_14"] >= rsi_threshold and ivr <= 65:
             return None
 
     # 4. Bullish MACD OR IVR > 60
@@ -356,12 +370,27 @@ def evaluate_cc(ticker: str, position: dict, params: dict) -> Optional[dict]:
     conviction = position.get("conviction", "medium")
     rules = CC_CONVICTION_RULES.get(conviction, CC_CONVICTION_RULES["medium"])
 
+    # Pre-market boost (active during first scan at 9:35 AM)
+    pm_data = get_premarket_data(ticker)
+    pm_signal = pm_data["premarket_signal"] if pm_data else "watch"
+
+    # Block if large pre-market move (news risk)
+    if pm_signal == "avoid":
+        logger.info(f"{ticker} blocked — large pre-market move, verify news")
+        return None
+
+    pm_cc_boost = pm_signal == "strong_cc"
+    if pm_cc_boost:
+        tags.append("\u26a1 Pre-market strength \u2014 momentum confirmed")
+
     # 1. Green day (required for all conviction levels)
     if data["change_pct"] <= 0:
         return None
 
-    # 2. RSI check based on conviction
+    # 2. RSI check based on conviction (pre-market boost relaxes to > 50)
     rsi_min = rules["rsi_min"]
+    if pm_cc_boost and rsi_min is not None:
+        rsi_min = min(rsi_min, 50)
     if rsi_min is not None:
         if data["rsi_14"] is not None and data["rsi_14"] <= rsi_min:
             return None

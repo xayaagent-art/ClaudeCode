@@ -1,8 +1,9 @@
 """
 scheduler.py — APScheduler config for market-hours-only polling.
 
-Runs the signal scan every 5 minutes between 9:35am–3:55pm ET,
-and the morning brief at 9:30am ET. Skips weekends and holidays.
+Runs the pre-market scan at 8:00am ET, morning brief at 9:30am ET,
+signal scan every 5 minutes between 9:35am–3:55pm ET.
+Skips weekends and holidays.
 """
 
 import asyncio
@@ -15,6 +16,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from src.alert_manager import cleanup_old_alerts, record_alert, should_alert
+from src.market_data import get_premarket_data, get_vix
 from src.morning_brief import build_morning_brief
 from src.position_tracker import get_monthly_summary
 from src.signal_engine import scan_cc_signals, scan_close_signals, scan_csp_signals
@@ -22,6 +24,7 @@ from src.telegram_bot import (
     format_cc_alert,
     format_close_alert,
     format_csp_alert,
+    format_premarket_alert,
     send_alert,
 )
 
@@ -66,6 +69,58 @@ async def run_scan():
     logger.info("Scan complete.")
 
 
+async def run_premarket_scan():
+    """Run the 8:00 AM pre-market scan and send alert."""
+    logger.info("Running pre-market scan...")
+    config = load_config()
+    watchlist = config.get("watchlist", [])
+    positions = config.get("positions", {}) or {}
+
+    # Get all tickers to scan (watchlist + positions)
+    all_tickers = set(watchlist)
+    for ticker in positions:
+        if positions[ticker] and positions[ticker].get("shares", 0) >= 100:
+            all_tickers.add(ticker)
+
+    # Fetch pre-market data for all tickers
+    movers_down = []
+    movers_up = []
+    avoid_list = []
+
+    for ticker in sorted(all_tickers):
+        pm = get_premarket_data(ticker)
+        if not pm:
+            continue
+
+        change = pm["premarket_change_pct"]
+
+        if change < -7:
+            avoid_list.append(pm)
+        elif change < -1.5:
+            movers_down.append(pm)
+        elif change > 1.5:
+            movers_up.append(pm)
+
+    # Sort by magnitude of move
+    movers_down.sort(key=lambda x: x["premarket_change_pct"])
+    movers_up.sort(key=lambda x: x["premarket_change_pct"], reverse=True)
+
+    # Get SPY, QQQ, VIX
+    spy_data = get_premarket_data("SPY")
+    qqq_data = get_premarket_data("QQQ")
+    vix_level, _ = get_vix()
+
+    now_et = datetime.now(ET)
+    date_str = now_et.strftime("%b %d, %Y")
+
+    msg = format_premarket_alert(
+        date_str, spy_data, qqq_data, vix_level,
+        movers_down, movers_up, avoid_list,
+    )
+    await send_alert(msg)
+    logger.info("Pre-market scan sent.")
+
+
 async def run_morning_brief():
     """Build and send the morning brief."""
     logger.info("Building morning brief...")
@@ -108,6 +163,15 @@ def create_scheduler() -> AsyncIOScheduler:
 
     scheduler = AsyncIOScheduler(timezone=ET)
 
+    # Pre-market scan at 8:00 AM ET, weekdays only
+    scheduler.add_job(
+        run_premarket_scan,
+        CronTrigger(hour=8, minute=0, day_of_week="mon-fri", timezone=ET),
+        id="premarket_scan",
+        name="Pre-Market Scan",
+        misfire_grace_time=300,
+    )
+
     # Morning brief at 9:30 AM ET, weekdays only
     scheduler.add_job(
         run_morning_brief,
@@ -141,7 +205,7 @@ def create_scheduler() -> AsyncIOScheduler:
     )
 
     logger.info(
-        f"Scheduler configured: brief at {brief_time} ET, "
+        f"Scheduler configured: pre-market at 8:00 ET, brief at {brief_time} ET, "
         f"scans every {interval}min {open_time}-{close_time} ET"
     )
     return scheduler
