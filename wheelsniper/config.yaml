@@ -16,12 +16,17 @@ signal_params:
   # Delta range for CC strikes
   cc_delta_min: 0.25
   cc_delta_max: 0.35
-  # DTE window for CSP positions
-  dte_min: 21
-  dte_max: 45
+  # DTE window for CSP positions (target = preferred, min/max = hard bounds)
+  csp_dte_target: 35
+  csp_dte_min: 30
+  csp_dte_max: 45
   # DTE window for CC positions
+  cc_dte_target: 28
   cc_dte_min: 21
   cc_dte_max: 35
+  # Legacy aliases (for backwards compat)
+  dte_min: 30
+  dte_max: 45
   # Close at this % of max profit
   close_profit_pct: 50
   # Close if within this many DTE with < close_dte_profit_pct remaining
@@ -73,62 +78,86 @@ positions:
   HIMS:
     shares: 105
     cost_basis: 41.13
-    conviction: medium
+    conviction: aggressive_exit
+    exit_mode: true
+    exit_note: "Sell ATM or ITM calls, get out fast"
     earnings: "2026-05-11"
   ASTS:
     shares: 100
     cost_basis: 100.00
-    conviction: high
+    conviction: medium
+    exit_mode: false
     earnings: "2026-05-18"
   NBIS:
     shares: 113
     cost_basis: 98.53
     conviction: medium
+    exit_mode: false
     earnings: null
   IREN:
     shares: 100
     cost_basis: 50.00
     conviction: medium
+    exit_mode: false
     earnings: "2026-05-13"
   RKLB:
     shares: 100
     cost_basis: 80.00
     conviction: medium
+    exit_mode: false
     earnings: null
   SOFI:
     shares: 100
     cost_basis: 25.00
-    conviction: medium
+    conviction: exit_efficient
+    exit_mode: true
+    exit_note: "Good fundamentals but want out, efficient exit"
     earnings: "2026-05-04"
   EOSE:
     shares: 235
     cost_basis: 13.07
-    conviction: low
+    conviction: aggressive_exit
+    exit_mode: true
+    exit_note: "Thesis broken, sell aggressive CC near ATM"
     earnings: null
   ONDS:
     shares: 100
     cost_basis: 12.00
     conviction: medium
+    exit_mode: false
     earnings: null
   TE:
     shares: 100
     cost_basis: 8.00
     conviction: medium
+    exit_mode: false
     earnings: null
   HOOD:
     shares: 100
     cost_basis: 95.00
     conviction: medium
+    exit_mode: false
+    exit_note: "High conviction hold, standard CC 0.25-0.35 delta"
     earnings: "2026-04-29"
   CIFR:
     shares: 100
     cost_basis: 19.00
     conviction: medium
+    exit_mode: false
     earnings: null
   BMNU:
     shares: 30
     cost_basis: 4.00
-    conviction: low
+    conviction: aggressive_exit
+    exit_mode: true
+    exit_note: "Low conviction, exit as fast as possible"
+    earnings: null
+  APLD:
+    shares: 100
+    cost_basis: 0.00
+    conviction: exit_efficient
+    exit_mode: true
+    exit_note: "New assignment, want to exit efficiently"
     earnings: null
 
 # Open option positions to track for close/roll signals

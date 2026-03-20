@@ -351,12 +351,19 @@ def get_vix() -> tuple[Optional[float], str]:
         return None, "unknown"
 
 
-def get_options_chain(ticker: str, dte_min: int = 21, dte_max: int = 45) -> Optional[dict]:
-    """Fetch the options chain for the expiration closest to the target DTE window.
+def get_options_chain(
+    ticker: str, dte_min: int = 21, dte_max: int = 45, dte_target: int = None,
+) -> Optional[dict]:
+    """Fetch the options chain for the expiration closest to the target DTE.
+
+    Uses select_best_expiry() to pick expiry closest to dte_target
+    (not just the minimum DTE in range).
 
     Returns dict with keys: expiry, puts (DataFrame), calls (DataFrame), days_to_expiry
     or None if no suitable expiration found.
     """
+    from src.strike_selector import select_best_expiry
+
     try:
         stock = yf.Ticker(ticker)
         expirations = stock.options
@@ -364,33 +371,21 @@ def get_options_chain(ticker: str, dte_min: int = 21, dte_max: int = 45) -> Opti
             logger.warning(f"No options expirations for {ticker}")
             return None
 
-        today = datetime.now().date()
-        target_min = today + timedelta(days=dte_min)
-        target_max = today + timedelta(days=dte_max)
+        # Use target-based selection if dte_target provided
+        if dte_target is not None:
+            chosen_expiry, dte = select_best_expiry(
+                list(expirations), dte_target, dte_min, dte_max
+            )
+        else:
+            # Legacy fallback: pick closest to midpoint
+            mid_target = (dte_min + dte_max) // 2
+            chosen_expiry, dte = select_best_expiry(
+                list(expirations), mid_target, dte_min, dte_max
+            )
 
-        # Find expiration dates within the DTE window
-        valid_expiries = []
-        for exp_str in expirations:
-            exp_date = datetime.strptime(exp_str, "%Y-%m-%d").date()
-            if target_min <= exp_date <= target_max:
-                valid_expiries.append(exp_str)
-
-        if not valid_expiries:
-            # Fall back to the nearest expiration after dte_min
-            for exp_str in expirations:
-                exp_date = datetime.strptime(exp_str, "%Y-%m-%d").date()
-                if exp_date >= target_min:
-                    valid_expiries = [exp_str]
-                    break
-
-        if not valid_expiries:
+        if not chosen_expiry:
             logger.warning(f"No suitable expirations for {ticker} (DTE {dte_min}-{dte_max})")
             return None
-
-        # Pick the first valid expiration (closest to dte_min)
-        chosen_expiry = valid_expiries[0]
-        exp_date = datetime.strptime(chosen_expiry, "%Y-%m-%d").date()
-        dte = (exp_date - today).days
 
         chain = stock.option_chain(chosen_expiry)
 
