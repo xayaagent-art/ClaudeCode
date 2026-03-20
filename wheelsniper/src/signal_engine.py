@@ -3,6 +3,14 @@ signal_engine.py — Core signal logic for the Wheel Strategy.
 
 Evaluates each ticker against CSP, CC, close, and roll rules,
 then returns actionable signals with full trade details.
+
+Phase 2A filter rules:
+- CSP: red day (IVR>70 override), RSI<40 (IVR>65 override), IVR>=30,
+  bullish MACD (IVR>60 override), yield>=1.5%, DTE 21-45, delta 0.20-0.30,
+  no earnings 10d
+- CC: green day, RSI>60, 100+ shares, strike>basis, DTE 21-35,
+  delta 0.25-0.35, no earnings 10d, EOSE special rule
+- VIX overlay on all signals
 """
 
 import logging
@@ -12,7 +20,7 @@ import yaml
 
 from src.earnings_filter import has_upcoming_earnings
 from src.iv_calculator import calculate_ivr
-from src.market_data import get_options_chain, get_stock_snapshot
+from src.market_data import get_market_data, get_options_chain, get_vix
 from src.strike_selector import calculate_yield, select_call_strike, select_put_strike
 
 logger = logging.getLogger(__name__)
@@ -24,17 +32,19 @@ def load_config() -> dict:
         return yaml.safe_load(f)
 
 
-def scan_csp_signals(config: dict = None) -> list[dict]:
-    """Scan watchlist for Cash-Secured Put entry signals.
+def _get_vix_note(vix_level: Optional[float], vix_env: str) -> Optional[str]:
+    """Return VIX context note for a signal, or None for normal conditions."""
+    if vix_env == "low_vol":
+        return "\u26a0\ufe0f Low vol \u2014 premium thin, be selective"
+    elif vix_env == "elevated":
+        return "\u2705 Elevated vol \u2014 favorable premium environment"
+    elif vix_env == "high_fear":
+        return "\u26a0\ufe0f High fear \u2014 reduce contract size 20\u201330%"
+    return None  # normal — no note
 
-    CSP fires when:
-    - Stock is DOWN on the day
-    - IVR > 30
-    - Price near 20-day MA support
-    - Best strike delta 0.20–0.30
-    - DTE 21–35 days
-    - No earnings within 7 days
-    """
+
+def scan_csp_signals(config: dict = None) -> list[dict]:
+    """Scan watchlist for Cash-Secured Put entry signals."""
     config = config or load_config()
     params = config["signal_params"]
     signals = []
@@ -48,16 +58,7 @@ def scan_csp_signals(config: dict = None) -> list[dict]:
 
 
 def scan_cc_signals(config: dict = None) -> list[dict]:
-    """Scan assigned positions for Covered Call entry signals.
-
-    CC fires when:
-    - Stock is UP on the day
-    - You hold 100+ shares
-    - Price approaching resistance / 50-day MA
-    - Best strike delta ≤ 0.20
-    - DTE 21–35 days
-    - No earnings within 7 days
-    """
+    """Scan assigned positions for Covered Call entry signals."""
     config = config or load_config()
     params = config["signal_params"]
     positions = config.get("positions", {}) or {}
@@ -74,12 +75,7 @@ def scan_cc_signals(config: dict = None) -> list[dict]:
 
 
 def scan_close_signals(config: dict = None) -> list[dict]:
-    """Scan open trades for close/roll signals.
-
-    Close fires when:
-    - Position hits 50% of max profit
-    - OR within 7 DTE with < 25% profit remaining
-    """
+    """Scan open trades for close/roll signals."""
     from src.position_tracker import get_open_trades
 
     config = config or load_config()
@@ -95,55 +91,103 @@ def scan_close_signals(config: dict = None) -> list[dict]:
 
 
 def evaluate_csp(ticker: str, params: dict) -> Optional[dict]:
-    """Evaluate a single ticker for CSP signal."""
-    # 1. Get stock snapshot
-    snap = get_stock_snapshot(ticker)
-    if not snap:
+    """Evaluate a single ticker for CSP signal.
+
+    Filters (all must pass):
+    1. Red day — EXCEPT IVR > 70 (post-catalyst override)
+    2. RSI < 40 — EXCEPT IVR > 65 (premium override)
+    3. IVR >= 30 (hard minimum)
+    4. Bullish MACD OR IVR > 60
+    5. Premium yield >= 1.5%
+    6. DTE 21–45
+    7. Delta 0.20–0.30
+    8. No earnings within 10 days
+    """
+    # Get full market data (includes technicals)
+    data = get_market_data(ticker)
+    if not data:
         return None
 
-    # Must be a red day
-    if snap["change_pct"] >= 0:
-        return None
-
-    # 2. Check IVR
+    # Check IVR (hard minimum — check early to skip fast)
     ivr_data = calculate_ivr(ticker)
-    if not ivr_data or ivr_data["ivr"] < params["ivr_min"]:
+    if not ivr_data or ivr_data["ivr"] < params.get("ivr_min", 30):
         return None
 
-    # 3. Check proximity to 20-day MA support
-    if snap["ma_20"]:
-        distance_pct = abs(snap["price"] - snap["ma_20"]) / snap["ma_20"] * 100
-        if distance_pct > params["ma_support_pct"]:
+    ivr = ivr_data["ivr"]
+    tags = []
+
+    # 1. Red day check — IVR > 70 overrides
+    is_red = data["change_pct"] < 0
+    is_green = data["change_pct"] >= 0
+    if not is_red:
+        if ivr > 70:
+            tags.append("\u26a1 Post-catalyst override")
+        else:
             return None
-    # If no MA data, skip this check (small-cap / new stock)
 
-    # 4. Check earnings blackout
-    earnings = has_upcoming_earnings(ticker, params["earnings_blackout_days"])
-    if earnings["has_earnings"]:
-        logger.info(f"Skipping {ticker} CSP — earnings in {earnings['days_until']} days")
+    # 2. RSI < 40 — IVR > 65 overrides
+    if data["rsi_14"] is not None:
+        if data["rsi_14"] >= 40 and ivr <= 65:
+            return None
+
+    # 3. IVR >= 30 already checked above
+
+    # 4. Bullish MACD OR IVR > 60
+    if data["macd_trend"] == "bearish" and ivr <= 60:
         return None
 
-    # 5. Get options chain and select strike
-    chain = get_options_chain(ticker, params["dte_min"], params["dte_max"])
+    # 8. Earnings blackout (10 days hard block)
+    earnings_days = params.get("earnings_blackout_days", 10)
+    earnings = has_upcoming_earnings(ticker, earnings_days)
+    if earnings["has_earnings"]:
+        logger.info(f"Skipping {ticker} CSP \u2014 earnings in {earnings['days_until']} days")
+        return None
+
+    # 6. Get options chain (DTE 21–45)
+    dte_min = params.get("dte_min", 21)
+    dte_max = params.get("dte_max", 45)
+    chain = get_options_chain(ticker, dte_min, dte_max)
     if not chain:
         return None
 
-    strike = select_put_strike(
-        chain["puts"], snap["price"], params["csp_delta_min"], params["csp_delta_max"]
-    )
+    # 7. Select strike (delta 0.20–0.30)
+    delta_min = params.get("csp_delta_min", 0.20)
+    delta_max = params.get("csp_delta_max", 0.30)
+    strike = select_put_strike(chain["puts"], data["price"], delta_min, delta_max)
     if not strike:
         return None
 
-    # 6. Calculate yield
+    # 5. Premium yield >= 1.5%
     yield_info = calculate_yield(strike["premium"], strike["strike"], chain["days_to_expiry"])
+    if yield_info["yield_pct"] < 1.5:
+        return None
+
+    # Breakeven
+    breakeven = round(strike["strike"] - strike["premium"], 2)
+
+    # VIX overlay
+    vix_note = _get_vix_note(data["vix_level"], data["vix_env"])
 
     return {
         "type": "CSP",
         "ticker": ticker,
-        "price": snap["price"],
-        "change_pct": snap["change_pct"],
-        "ivr": ivr_data["ivr"],
+        "price": data["price"],
+        "change_pct": data["change_pct"],
+        "ivr": ivr,
         "iv": ivr_data["current_iv"],
+        "rsi_14": data["rsi_14"],
+        "macd_trend": data["macd_trend"],
+        "macd_line": data["macd_line"],
+        "signal_line": data["signal_line"],
+        "ma_20": data["ma_20"],
+        "ma_50": data["ma_50"],
+        "ma_position": data["ma_position"],
+        "week52_high": data["week52_high"],
+        "week52_low": data["week52_low"],
+        "pct_from_52w_low": data["pct_from_52w_low"],
+        "vix_level": data["vix_level"],
+        "vix_env": data["vix_env"],
+        "vix_note": vix_note,
         "expiry": chain["expiry"],
         "dte": chain["days_to_expiry"],
         "strike": strike["strike"],
@@ -153,56 +197,109 @@ def evaluate_csp(ticker: str, params: dict) -> Optional[dict]:
         "ask": strike["ask"],
         "yield_pct": yield_info["yield_pct"],
         "annualized_yield": yield_info["annualized_yield"],
+        "breakeven": breakeven,
         "earnings": earnings,
+        "tags": tags,
     }
 
 
 def evaluate_cc(ticker: str, position: dict, params: dict) -> Optional[dict]:
-    """Evaluate a single assigned position for CC signal."""
-    snap = get_stock_snapshot(ticker)
-    if not snap:
+    """Evaluate a single assigned position for CC signal.
+
+    Filters (all must pass):
+    1. Green day
+    2. RSI > 60
+    3. 100+ shares (already filtered by caller)
+    4. Strike > cost basis
+    5. DTE 21–35
+    6. Delta 0.25–0.35
+    7. No earnings within 10 days
+
+    EOSE special rule: delta 0.35–0.45, skip RSI check, add recovery tag.
+    """
+    data = get_market_data(ticker)
+    if not data:
         return None
 
-    # Must be a green day
-    if snap["change_pct"] <= 0:
-        return None
-
-    # Check IVR (optional for CC but helpful)
     ivr_data = calculate_ivr(ticker)
     if not ivr_data:
         return None
 
-    # Check proximity to 50-day MA resistance
-    if snap["ma_50"]:
-        distance_pct = abs(snap["price"] - snap["ma_50"]) / snap["ma_50"] * 100
-        if distance_pct > params["ma_resistance_pct"]:
-            return None
+    tags = []
+    conviction = position.get("conviction", "medium")
+    is_eose = ticker == "EOSE"
 
-    # Check earnings blackout
-    earnings = has_upcoming_earnings(ticker, params["earnings_blackout_days"])
-    if earnings["has_earnings"]:
-        logger.info(f"Skipping {ticker} CC — earnings in {earnings['days_until']} days")
+    # 1. Green day (EOSE: any green day regardless)
+    if data["change_pct"] <= 0:
         return None
 
-    # Get options chain and select strike
-    chain = get_options_chain(ticker, params["dte_min"], params["dte_max"])
+    # 2. RSI > 60 (EOSE: skip RSI check)
+    if not is_eose:
+        if data["rsi_14"] is not None and data["rsi_14"] <= 60:
+            return None
+
+    # EOSE special handling
+    if is_eose:
+        tags.append("\u26aa Recovery mode \u2014 aggressive CC to lower basis")
+
+    # 7. Earnings blackout (10 days hard block)
+    earnings_days = params.get("earnings_blackout_days", 10)
+    earnings = has_upcoming_earnings(ticker, earnings_days)
+    if earnings["has_earnings"]:
+        logger.info(f"Skipping {ticker} CC \u2014 earnings in {earnings['days_until']} days")
+        return None
+
+    # 5. Get options chain (DTE 21–35)
+    cc_dte_min = params.get("cc_dte_min", params.get("dte_min", 21))
+    cc_dte_max = params.get("cc_dte_max", 35)
+    chain = get_options_chain(ticker, cc_dte_min, cc_dte_max)
     if not chain:
         return None
 
-    strike = select_call_strike(chain["calls"], snap["price"], params["cc_delta_max"])
+    # 6. Select strike — EOSE uses aggressive delta 0.35–0.45, others 0.25–0.35
+    if is_eose:
+        cc_delta_min = 0.35
+        cc_delta_max = 0.45
+    else:
+        cc_delta_min = params.get("cc_delta_min", 0.25)
+        cc_delta_max = params.get("cc_delta_max", 0.35)
+
+    strike = select_call_strike(chain["calls"], data["price"], cc_delta_max, cc_delta_min)
     if not strike:
         return None
 
-    cost_basis = position.get("cost_basis", snap["price"])
+    # 4. Strike must be above cost basis
+    cost_basis = position.get("cost_basis", data["price"])
+    if strike["strike"] <= cost_basis:
+        return None
+
     yield_info = calculate_yield(strike["premium"], cost_basis, chain["days_to_expiry"])
+
+    # P&L if called away
+    pnl_if_called = round((strike["strike"] - cost_basis) * position.get("shares", 100) + strike["premium"] * 100, 2)
+
+    # VIX overlay
+    vix_note = _get_vix_note(data["vix_level"], data["vix_env"])
 
     return {
         "type": "CC",
         "ticker": ticker,
-        "price": snap["price"],
-        "change_pct": snap["change_pct"],
+        "price": data["price"],
+        "change_pct": data["change_pct"],
         "ivr": ivr_data["ivr"],
         "iv": ivr_data["current_iv"],
+        "rsi_14": data["rsi_14"],
+        "macd_trend": data["macd_trend"],
+        "macd_line": data["macd_line"],
+        "signal_line": data["signal_line"],
+        "ma_20": data["ma_20"],
+        "ma_50": data["ma_50"],
+        "ma_position": data["ma_position"],
+        "week52_high": data["week52_high"],
+        "week52_low": data["week52_low"],
+        "vix_level": data["vix_level"],
+        "vix_env": data["vix_env"],
+        "vix_note": vix_note,
         "expiry": chain["expiry"],
         "dte": chain["days_to_expiry"],
         "strike": strike["strike"],
@@ -214,7 +311,10 @@ def evaluate_cc(ticker: str, position: dict, params: dict) -> Optional[dict]:
         "annualized_yield": yield_info["annualized_yield"],
         "shares": position.get("shares", 100),
         "cost_basis": cost_basis,
+        "pnl_if_called": pnl_if_called,
+        "conviction": conviction,
         "earnings": earnings,
+        "tags": tags,
     }
 
 
@@ -234,7 +334,6 @@ def evaluate_close(trade: dict, params: dict) -> Optional[dict]:
     dte = (expiry_date - today).days
 
     if dte < 0:
-        # Expired — should have been handled
         return None
 
     # Fetch current option price
