@@ -9,9 +9,11 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
+import pytz
 import yfinance as yf
 
 logger = logging.getLogger(__name__)
+ET = pytz.timezone("America/New_York")
 
 
 def get_key_levels(ticker: str, bb_lower: float = None, bb_upper: float = None,
@@ -143,7 +145,7 @@ def _calc_current_month(hist) -> tuple[Optional[float], Optional[float]]:
     if hist.empty:
         return None, None
 
-    now = datetime.now()
+    now = datetime.now(ET)
     current_year = now.year
     current_month = now.month
 

@@ -10,10 +10,12 @@ import logging
 
 import yaml
 
+from src.ai_analyst import get_market_context, get_news_sentiment
 from src.earnings_filter import has_upcoming_earnings
 from src.iv_calculator import calculate_ivr
-from src.market_data import get_options_chain, get_premarket_data, get_stock_snapshot
+from src.market_data import get_options_chain, get_premarket_data, get_stock_snapshot, get_vix
 from src.position_tracker import get_monthly_summary, get_open_trades
+from src.sector_guard import format_sector_warnings
 from src.strike_selector import calculate_yield, select_call_strike, select_put_strike
 
 logger = logging.getLogger(__name__)
@@ -80,6 +82,19 @@ def build_morning_brief(config: dict = None) -> str:
     pm_cache = {}
     for ticker in watchlist:
         pm_cache[ticker] = get_premarket_data(ticker)
+
+    # AI market context
+    vix_level, _ = get_vix()
+    spy_change = spy_pm["premarket_change_pct"] if spy_pm else 0
+    qqq_change = qqq_pm["premarket_change_pct"] if qqq_pm else 0
+    ai_context = get_market_context(spy_change, qqq_change, vix_level or 18)
+
+    # News sentiment for all watchlist tickers
+    news_sentiments = {}
+    for ticker in watchlist:
+        sent = get_news_sentiment(ticker)
+        if sent and sent["sentiment"] != "neutral":
+            news_sentiments[ticker] = sent
 
     # Scan tickers for potential setups
     csp_candidates = []
@@ -182,6 +197,10 @@ def build_morning_brief(config: dict = None) -> str:
     # Build message
     lines = ["\u2600\ufe0f MORNING BRIEF\n"]
 
+    # AI market context (at top)
+    if ai_context:
+        lines.append(f"\U0001f916 {ai_context}\n")
+
     # Market bias from SPY pre-market
     lines.append(_get_market_bias(spy_pm))
     if spy_pm:
@@ -230,6 +249,15 @@ def build_morning_brief(config: dict = None) -> str:
     else:
         lines.append("\U0001f7e2 No CC setups (check assigned positions in config).")
 
+    # News sentiment (non-neutral only)
+    if news_sentiments:
+        lines.append(f"\n\U0001f4f0 News:")
+        for ticker, sent in news_sentiments.items():
+            if sent["sentiment"] == "major_event":
+                lines.append(f"  {ticker}: \u26a0\ufe0f major_event: {sent['detail']}")
+            else:
+                lines.append(f"  {ticker}: {sent['sentiment']}")
+
     # Pre-market warnings
     if premarket_warnings:
         lines.append(f"\n{SEP}")
@@ -240,6 +268,12 @@ def build_morning_brief(config: dict = None) -> str:
     if earnings_warnings:
         lines.append("\n\U0001f4c5 Earnings Watch:")
         lines.extend(earnings_warnings)
+
+    # Sector concentration warnings
+    sector_warnings = format_sector_warnings(csp_candidates)
+    if sector_warnings:
+        lines.append(f"\n\U0001f6e1\ufe0f Sector Concentration:")
+        lines.extend(sector_warnings)
 
     lines.append(f"\n\u23f0 Next scan at 9:35 AM ET")
     return "\n".join(lines)

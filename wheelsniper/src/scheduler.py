@@ -15,9 +15,11 @@ import yaml
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from src.ai_analyst import generate_signal_thesis
 from src.alert_manager import cleanup_old_alerts, record_alert, should_alert
 from src.market_data import get_premarket_data, get_vix
 from src.morning_brief import build_morning_brief
+from src.notion_sync import log_signal_to_notion, track_intraday_premium, track_position_targets
 from src.position_tracker import get_monthly_summary
 from src.signal_engine import scan_cc_signals, scan_close_signals, scan_csp_signals
 from src.telegram_bot import (
@@ -29,7 +31,7 @@ from src.telegram_bot import (
 )
 
 logger = logging.getLogger(__name__)
-ET = pytz.timezone("US/Eastern")
+ET = pytz.timezone("America/New_York")
 
 
 def load_config() -> dict:
@@ -43,19 +45,31 @@ async def run_scan():
     config = load_config()
     dedup_hours = config.get("alert_dedup_hours", 4)
 
-    # CSP signals
+    # CSP signals (only alert on score >= 7)
     for signal in scan_csp_signals(config):
+        if not signal.get("should_alert", True):
+            continue
         if should_alert(signal["ticker"], "CSP", dedup_hours):
+            thesis = generate_signal_thesis(signal)
+            if thesis:
+                signal["ai_thesis"] = thesis
             msg = format_csp_alert(signal)
             await send_alert(msg)
             record_alert(signal["ticker"], "CSP", msg)
+            log_signal_to_notion(signal)
 
-    # CC signals
+    # CC signals (only alert on score >= 7)
     for signal in scan_cc_signals(config):
+        if not signal.get("should_alert", True):
+            continue
         if should_alert(signal["ticker"], "CC", dedup_hours):
+            thesis = generate_signal_thesis(signal)
+            if thesis:
+                signal["ai_thesis"] = thesis
             msg = format_cc_alert(signal)
             await send_alert(msg)
             record_alert(signal["ticker"], "CC", msg)
+            log_signal_to_notion(signal)
 
     # Close signals
     for signal in scan_close_signals(config):
@@ -65,6 +79,13 @@ async def run_scan():
             msg = format_close_alert(signal, summary["total_income"], target)
             await send_alert(msg)
             record_alert(signal["ticker"], "CLOSE", msg)
+
+    # Notion position tracking (close targets + intraday premium)
+    try:
+        track_position_targets(send_alert_fn=send_alert)
+        track_intraday_premium(send_alert_fn=send_alert)
+    except Exception as e:
+        logger.debug(f"Notion tracking error: {e}")
 
     logger.info("Scan complete.")
 
