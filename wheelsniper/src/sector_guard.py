@@ -32,11 +32,13 @@ SECTOR_MAP = {
     "TSLA": "EV/Auto", "RIVN": "EV/Auto", "LCID": "EV/Auto",
     "NIO": "EV/Auto", "XPEV": "EV/Auto", "GM": "EV/Auto",
     "F": "EV/Auto",
-    # Energy / Mining
+    # Energy / Mining / Data Centers
     "IREN": "Energy/Mining", "MARA": "Energy/Mining", "RIOT": "Energy/Mining",
     "CLSK": "Energy/Mining", "BITF": "Energy/Mining", "HUT": "Energy/Mining",
+    "CIFR": "Energy/Mining", "APLD": "Energy/Mining",
     "XOM": "Energy", "CVX": "Energy", "OXY": "Energy",
     "SLB": "Energy", "HAL": "Energy",
+    "OKLO": "Nuclear", "UEC": "Nuclear",
     # Healthcare / Biotech
     "MRNA": "Biotech", "BNTX": "Biotech", "PFE": "Biotech",
     "JNJ": "Healthcare", "UNH": "Healthcare", "ABBV": "Healthcare",
@@ -56,10 +58,22 @@ SECTOR_MAP = {
     "O": "REIT", "AMT": "REIT", "PLD": "REIT",
     # Cannabis / Speculative
     "TLRY": "Cannabis", "CGC": "Cannabis",
-    # AI / Cloud
+    # AI / Cloud / Quantum
     "PLTR": "AI/Cloud", "SNOW": "AI/Cloud", "NET": "AI/Cloud",
     "DDOG": "AI/Cloud", "ZS": "AI/Cloud", "CRWD": "AI/Cloud",
     "AI": "AI/Cloud", "PATH": "AI/Cloud", "S": "AI/Cloud",
+    "IONQ": "Quantum", "NBIS": "AI/Cloud",
+    # Space / Defense
+    "ASTS": "Space", "RKLB": "Space", "LUNR": "Space",
+    # Speculative / Small Cap
+    "CRWV": "Speculative", "BMNU": "Speculative", "ONDS": "Speculative",
+    "TE": "Speculative", "AXT": "Semiconductor",
+    # Healthcare / Consumer
+    "HIMS": "Healthcare", "EOSE": "Energy Storage",
+    # ETF / Index
+    "IBIT": "ETF", "TQQQ": "ETF",
+    # Adtech / Marketing
+    "ZETA": "Adtech",
 }
 
 

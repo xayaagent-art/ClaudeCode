@@ -82,8 +82,8 @@ async def run_scan():
 
     # Notion position tracking (close targets + intraday premium)
     try:
-        track_position_targets(send_alert_fn=send_alert)
-        track_intraday_premium(send_alert_fn=send_alert)
+        await track_position_targets(send_alert_fn=send_alert)
+        await track_intraday_premium(send_alert_fn=send_alert)
     except Exception as e:
         logger.debug(f"Notion tracking error: {e}")
 

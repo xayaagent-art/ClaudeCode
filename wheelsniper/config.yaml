@@ -59,17 +59,27 @@ watchlist:
   - ASTS
   - APLD
   - NBIS
+  - EOSE
+  - SOFI
   - HIMS
   - RKLB
   - HOOD
   - CIFR
   - CRWV
+  - BMNU
   - ONDS
   - TE
+  - CLSK
+  - MARA
+  - IONQ
+  - PLTR
+  - OKLO
+  - ZETA
+  - LUNR
+  - UEC
+  - IBIT
+  - TQQQ
   - AXT
-  - EOSE
-  - SOFI
-  - BMNU
 
 # Assigned positions — tickers where you hold 100+ shares and can sell CCs
 # Update shares and cost_basis as your positions change.
