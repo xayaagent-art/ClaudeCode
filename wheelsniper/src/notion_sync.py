@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 ET = pytz.timezone("America/New_York")
 
 NOTION_TRADE_LOG_DB = os.getenv(
-    "NOTION_TRADE_LOG_DB", "f6c80000-efc6-44cf-853e-25ead241ac0d"
+    "NOTION_TRADE_LOG_DB", "0d26868c0c174ea1be3e11938099c2d4"
 )
 
 # Cache open positions for 5 minutes
@@ -97,13 +97,11 @@ def get_open_positions() -> list[dict]:
         return _positions_cache.get("data") or []
 
 
-def track_position_targets(send_alert_fn=None) -> list[dict]:
+async def track_position_targets(send_alert_fn=None) -> list[dict]:
     """Check open positions against time-weighted close targets.
 
     Returns list of close alert dicts. Fires Telegram alert if send_alert_fn provided.
     """
-    import asyncio
-
     positions = get_open_positions()
     if not positions:
         return []
@@ -170,7 +168,7 @@ def track_position_targets(send_alert_fn=None) -> list[dict]:
 
                     if send_alert_fn:
                         msg = _format_close_target_alert(alert)
-                        asyncio.get_event_loop().create_task(send_alert_fn(msg))
+                        await send_alert_fn(msg)
 
         except Exception as e:
             logger.debug(f"Position target check failed for {pos.get('ticker')}: {e}")
@@ -178,13 +176,12 @@ def track_position_targets(send_alert_fn=None) -> list[dict]:
     return alerts
 
 
-def track_intraday_premium(send_alert_fn=None) -> list[dict]:
+async def track_intraday_premium(send_alert_fn=None) -> list[dict]:
     """Track option premium high/low for open positions.
 
     Fires alerts for: near day low (close window), near day high (moving against),
-    and IV spikes.
+    and IV spikes. Iterates ALL open positions from Notion Trade Log.
     """
-    import asyncio
     global _intraday_data, _intraday_date
 
     today_str = datetime.now(ET).strftime("%Y-%m-%d")
@@ -204,6 +201,8 @@ def track_intraday_premium(send_alert_fn=None) -> list[dict]:
             strike = pos["strike"]
             expiry_str = pos["expiry"]
             premium = pos["premium"]
+            if not all([ticker, strike, expiry_str, premium]):
+                continue
             opt_type = "P" if pos["type"] == "CSP" else "C"
             key = f"{ticker}_{strike}{opt_type}_{expiry_str}"
 
@@ -231,11 +230,11 @@ def track_intraday_premium(send_alert_fn=None) -> list[dict]:
             entry = _intraday_data[key]
             profit_pct = ((premium - current) / premium) * 100 if premium > 0 else 0
 
-            # Alert 1: Near day low (best close window)
+            # Alert 1: Near day low (best close window) — within 20% of day low
             if (entry["day_low"] > 0
-                    and current <= entry["day_low"] * 1.04
+                    and current <= entry["day_low"] * 1.20
                     and profit_pct > 20):
-                dedup_key = f"daylow_{key}"
+                dedup_key = f"intraday_{ticker}_{strike}_day_low_{today_str}"
                 if _should_alert(dedup_key, hours=2):
                     alert = {
                         "alert_type": "day_low",
@@ -250,13 +249,13 @@ def track_intraday_premium(send_alert_fn=None) -> list[dict]:
                     alerts.append(alert)
                     if send_alert_fn:
                         msg = _format_day_low_alert(alert)
-                        asyncio.get_event_loop().create_task(send_alert_fn(msg))
+                        await send_alert_fn(msg)
 
-            # Alert 2: Near day high (moving against)
+            # Alert 2: Near day high (moving against) — within 80% of day high
             if (entry["day_high"] > 0
-                    and current >= entry["day_high"] * 0.96
+                    and current >= entry["day_high"] * 0.80
                     and profit_pct < -15):
-                dedup_key = f"dayhigh_{key}"
+                dedup_key = f"intraday_{ticker}_{strike}_day_high_{today_str}"
                 if _should_alert(dedup_key, hours=2):
                     alert = {
                         "alert_type": "day_high",
@@ -271,17 +270,19 @@ def track_intraday_premium(send_alert_fn=None) -> list[dict]:
                     alerts.append(alert)
                     if send_alert_fn:
                         msg = _format_day_high_alert(alert)
-                        asyncio.get_event_loop().create_task(send_alert_fn(msg))
+                        await send_alert_fn(msg)
 
-            # Alert 3: IV spike
+            # Alert 3: IV spike >25% from morning baseline
             morning_iv = entry.get("morning_iv")
             if (current_iv and morning_iv
                     and current_iv > morning_iv * 1.25):
-                dedup_key = f"ivspike_{key}"
-                if _should_alert(dedup_key, hours=3):
+                dedup_key = f"intraday_{ticker}_{strike}_iv_spike_{today_str}"
+                if _should_alert(dedup_key, hours=2):
                     alert = {
                         "alert_type": "iv_spike",
                         "ticker": ticker, "type": pos["type"],
+                        "strike": strike, "expiry": expiry_str,
+                        "opt_type": opt_type,
                         "current_iv": round(current_iv, 1),
                         "morning_iv": round(morning_iv, 1),
                         "iv_change": round(current_iv - morning_iv, 1),
@@ -289,7 +290,7 @@ def track_intraday_premium(send_alert_fn=None) -> list[dict]:
                     alerts.append(alert)
                     if send_alert_fn:
                         msg = _format_iv_spike_alert(alert)
-                        asyncio.get_event_loop().create_task(send_alert_fn(msg))
+                        await send_alert_fn(msg)
 
         except Exception as e:
             logger.debug(f"Intraday tracking failed for {pos.get('ticker')}: {e}")
@@ -462,41 +463,34 @@ def _format_close_target_alert(alert: dict) -> str:
 
 def _format_day_low_alert(alert: dict) -> str:
     return (
-        f"\U0001f4c9 CLOSE WINDOW \u2014 {alert['ticker']} {alert['type']}\n"
+        f"\U0001f7e2 {alert['ticker']} {alert['strike']}{alert['opt_type']} "
+        f"\u2014 Premium near day low ${alert['current']:.2f}.\n"
+        f"Best fill window to BUY BACK. Consider closing.\n"
         f"{SEP}\n"
-        f"{alert['strike']}{alert['opt_type']} near day LOW \U0001f4c9\n"
-        f"Current: ${alert['current']:.2f} | Day range: "
-        f"${alert['day_low']:.2f}\u2013${alert['day_high']:.2f}\n"
-        f"Premium at lowest point = max profit opportunity\n"
-        f"Profit if closed now: {alert['profit_pct']:.0f}%\n"
-        f"{SEP}\n"
-        f"Action: Consider BUY TO CLOSE for best fill"
+        f"Day range: ${alert['day_low']:.2f}\u2013${alert['day_high']:.2f}\n"
+        f"Profit if closed now: {alert['profit_pct']:.0f}%"
     )
 
 
 def _format_day_high_alert(alert: dict) -> str:
     return (
-        f"\u26a0\ufe0f POSITION ALERT \u2014 {alert['ticker']} {alert['type']}\n"
+        f"\U0001f534 {alert['ticker']} {alert['strike']}{alert['opt_type']} "
+        f"\u2014 Premium near day high ${alert['current']:.2f}.\n"
+        f"Position moving against you. Review.\n"
         f"{SEP}\n"
-        f"{alert['strike']}{alert['opt_type']} near day HIGH \u26a0\ufe0f\n"
-        f"Current: ${alert['current']:.2f} | Day range: "
-        f"${alert['day_low']:.2f}\u2013${alert['day_high']:.2f}\n"
-        f"Premium at highest point = moving against you\n"
-        f"P&L: {alert['profit_pct']:.0f}% (loss)\n"
-        f"{SEP}\n"
-        f"Action: Monitor \u2014 consider rolling if continues"
+        f"Day range: ${alert['day_low']:.2f}\u2013${alert['day_high']:.2f}\n"
+        f"P&L: {alert['profit_pct']:.0f}%"
     )
 
 
 def _format_iv_spike_alert(alert: dict) -> str:
     return (
-        f"\u26a1 IV SPIKE \u2014 {alert['ticker']}\n"
+        f"\u26a1 {alert['ticker']} IV spike \u2014 "
+        f"IV now {alert['current_iv']:.0f}% vs morning {alert['morning_iv']:.0f}%. "
+        f"Act now.\n"
         f"{SEP}\n"
-        f"IV: {alert['current_iv']:.0f}% (was {alert['morning_iv']:.0f}% at open)\n"
         f"+{alert['iv_change']:.0f}% spike \u2014 premium inflated\n"
-        f"Open position: {alert['type']} \u2014 high IV = good roll window\n"
-        f"No position: Elevated IV = good CSP entry now\n"
-        f"{SEP}"
+        f"Open position: {alert['type']} \u2014 high IV = good roll window"
     )
 
 

@@ -238,11 +238,13 @@ def evaluate_csp(ticker: str, params: dict) -> Optional[dict]:
     if pm_csp_boost:
         tags.append("\u26a1 Pre-market dip \u2014 elevated IV expected")
 
-    # 1. Red day check — IVR > 70 overrides
+    # 1. Red day check — IVR > 70 overrides, IVR >= 60 allows neutral/green day
     is_red = data["change_pct"] < 0
     if not is_red:
         if ivr > 70:
             tags.append("\u26a1 Post-catalyst override")
+        elif ivr >= 60:
+            tags.append("\u26a1 High IV override \u2014 premium elevated on neutral day")
         else:
             return None
 
@@ -394,7 +396,7 @@ def evaluate_cc(ticker: str, position: dict, params: dict) -> Optional[dict]:
         return None
 
     ivr_data = calculate_ivr(ticker)
-    if not ivr_data:
+    if not ivr_data or ivr_data["ivr"] < params.get("cc_ivr_min", 20):
         return None
 
     tags = []

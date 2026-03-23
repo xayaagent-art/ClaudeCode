@@ -1,8 +1,8 @@
 """
 signal_scorer.py — Score signals 1-10 based on technical indicators.
 
-Only signals scoring 7+ get Telegram alerts.
-Scores 5-6 are logged silently. Below 5 are ignored.
+Only signals scoring 6+ get Telegram alerts.
+Scores 5 are logged silently. Below 5 are ignored.
 """
 
 import logging
@@ -150,13 +150,15 @@ def score_signal(signal: dict) -> dict:
         label = "\U0001f525 STRONG SIGNAL"
     elif score >= 7:
         label = "\u2b50 GOOD SIGNAL"
+    elif score >= 6:
+        label = "\U0001f44d DECENT SIGNAL"
     elif score >= 5:
         label = "moderate"
     else:
         label = "weak"
 
-    should_alert = score >= 7
-    should_log = 5 <= score < 7
+    should_alert = score >= 6
+    should_log = 5 <= score < 6
 
     if should_log:
         logger.info(
