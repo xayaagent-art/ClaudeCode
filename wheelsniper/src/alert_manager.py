@@ -10,7 +10,10 @@ import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import pytz
+
 logger = logging.getLogger(__name__)
+ET = pytz.timezone("America/New_York")
 
 DB_PATH = Path(__file__).parent.parent / "wheelsniper.db"
 
@@ -27,7 +30,7 @@ def should_alert(ticker: str, signal_type: str, dedup_hours: int = 4) -> bool:
     Returns True if no alert was sent in the last dedup_hours.
     """
     conn = _get_conn()
-    cutoff = (datetime.now() - timedelta(hours=dedup_hours)).strftime("%Y-%m-%d %H:%M:%S")
+    cutoff = (datetime.now(ET) - timedelta(hours=dedup_hours)).strftime("%Y-%m-%d %H:%M:%S")
 
     row = conn.execute(
         """SELECT COUNT(*) as cnt FROM alert_history
@@ -45,7 +48,7 @@ def record_alert(ticker: str, signal_type: str, message: str = ""):
     conn.execute(
         """INSERT INTO alert_history (ticker, signal_type, alert_time, message)
            VALUES (?, ?, ?, ?)""",
-        (ticker, signal_type, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), message),
+        (ticker, signal_type, datetime.now(ET).strftime("%Y-%m-%d %H:%M:%S"), message),
     )
     conn.commit()
     conn.close()
@@ -55,7 +58,7 @@ def record_alert(ticker: str, signal_type: str, message: str = ""):
 def cleanup_old_alerts(days: int = 30):
     """Remove alert history older than the specified number of days."""
     conn = _get_conn()
-    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    cutoff = (datetime.now(ET) - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
     conn.execute("DELETE FROM alert_history WHERE alert_time < ?", (cutoff,))
     conn.commit()
     conn.close()
@@ -64,7 +67,7 @@ def cleanup_old_alerts(days: int = 30):
 def get_recent_alerts(hours: int = 24) -> list[dict]:
     """Get alerts from the last N hours."""
     conn = _get_conn()
-    cutoff = (datetime.now() - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+    cutoff = (datetime.now(ET) - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
     rows = conn.execute(
         "SELECT * FROM alert_history WHERE alert_time > ? ORDER BY alert_time DESC",
         (cutoff,),

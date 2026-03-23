@@ -9,10 +9,12 @@ import logging
 import os
 from datetime import datetime
 
+import pytz
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 logger = logging.getLogger(__name__)
+ET = pytz.timezone("America/New_York")
 
 # Global application reference for sending alerts outside command handlers
 _app: Application = None
@@ -166,6 +168,17 @@ def _strike_vs_basis_line(signal: dict) -> str:
         return f"Strike vs basis: ${strike:.2f} <= ${basis:.2f} \u26a0\ufe0f Below basis"
 
 
+def _score_line(signal: dict) -> str:
+    """Build the score display line for an alert."""
+    score = signal.get("score")
+    label = signal.get("score_label", "")
+    if score is None:
+        return ""
+    thesis = signal.get("ai_thesis")
+    thesis_line = f"\n\U0001f9e0 {thesis}" if thesis else ""
+    return f"\n{SEP}\n{label} ({score}/10){thesis_line}"
+
+
 def _tags_block(tags: list) -> str:
     """Format signal tags as a block."""
     if not tags:
@@ -211,6 +224,7 @@ def format_csp_alert(signal: dict) -> str:
         f"{SEP}\n"
         f"{_earnings_line(signal)}\n"
         f"Action: SELL TO OPEN 1x {signal['ticker']} {signal['expiry']} ${signal['strike']:.2f}P"
+        f"{_score_line(signal)}"
     )
 
 
@@ -255,6 +269,7 @@ def format_cc_alert(signal: dict) -> str:
         f"{SEP}\n"
         f"{_earnings_line(signal)}\n"
         f"Action: SELL TO OPEN {contracts}x {signal['ticker']} {signal['expiry']} ${signal['strike']:.2f}C"
+        f"{_score_line(signal)}"
     )
 
 
@@ -400,7 +415,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     trades = get_open_trades()
     summary = get_monthly_summary()
-    now = datetime.now().strftime("%Y-%m-%d %H:%M ET")
+    now = datetime.now(ET).strftime("%Y-%m-%d %H:%M ET")
 
     msg = (
         f"\U0001f916 WheelSniper Status\n"
@@ -440,7 +455,7 @@ async def cmd_pnl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from src.position_tracker import get_monthly_summary
 
     summary = get_monthly_summary()
-    now = datetime.now()
+    now = datetime.now(ET)
 
     msg = (
         f"\U0001f4b0 P&L \u2014 {now.strftime('%B %Y')}\n"
@@ -455,22 +470,37 @@ async def cmd_pnl(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_positions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /positions — list all open trades."""
-    from src.position_tracker import get_open_trades
+    """Handle /positions — list open positions from Notion Trade Log."""
+    from src.notion_sync import format_positions_from_notion
 
-    trades = get_open_trades()
-    if not trades:
-        await update.message.reply_text("No open trades.")
+    msg = format_positions_from_notion()
+    await update.message.reply_text(msg)
+
+
+async def cmd_notion(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /notion — show Notion connection status."""
+    from src.notion_sync import format_notion_status
+
+    msg = format_notion_status()
+    await update.message.reply_text(msg)
+
+
+async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /analyze TICKER — AI-powered ticker analysis."""
+    from src.ai_analyst import analyze_ticker
+
+    if not context.args:
+        await update.message.reply_text("Usage: /analyze TICKER (e.g. /analyze SOFI)")
         return
 
-    lines = ["\U0001f4cb Open Positions\n"]
-    for t in trades:
-        opt = "P" if t["trade_type"] == "CSP" else "C"
-        lines.append(
-            f"  {t['trade_type']} {t['ticker']} {t['expiry']} ${t['strike']:.2f}{opt} "
-            f"@ ${t['premium']:.2f} x{t['quantity']}"
-        )
-    await update.message.reply_text("\n".join(lines))
+    ticker = context.args[0].upper()
+    await update.message.reply_text(f"\U0001f50d Analyzing {ticker}...")
+
+    result = analyze_ticker(ticker)
+    if result:
+        await update.message.reply_text(result)
+    else:
+        await update.message.reply_text(f"Could not analyze {ticker}. Check ticker or try again.")
 
 
 def create_bot() -> Application:
@@ -487,6 +517,8 @@ def create_bot() -> Application:
     _app.add_handler(CommandHandler("scan", cmd_scan))
     _app.add_handler(CommandHandler("pnl", cmd_pnl))
     _app.add_handler(CommandHandler("positions", cmd_positions))
+    _app.add_handler(CommandHandler("notion", cmd_notion))
+    _app.add_handler(CommandHandler("analyze", cmd_analyze))
 
     logger.info("Telegram bot created with command handlers")
     return _app

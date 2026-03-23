@@ -7,3 +7,5 @@ python-dotenv>=1.0.0
 PyYAML>=6.0.1
 pytz>=2023.3
 tzdata>=2023.3
+openai>=1.0.0
+notion-client>=2.0.0

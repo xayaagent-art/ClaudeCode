@@ -9,9 +9,11 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
+import pytz
 import yfinance as yf
 
 logger = logging.getLogger(__name__)
+ET = pytz.timezone("America/New_York")
 
 
 def get_next_earnings_date(ticker: str) -> Optional[datetime]:
@@ -70,7 +72,7 @@ def has_upcoming_earnings(ticker: str, blackout_days: int = 7) -> dict:
     else:
         earnings_date = earnings_dt
 
-    today = datetime.now().date()
+    today = datetime.now(ET).date()
     days_until = (earnings_date - today).days
 
     return {

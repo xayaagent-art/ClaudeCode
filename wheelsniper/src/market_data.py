@@ -17,7 +17,7 @@ import yfinance as yf
 
 logger = logging.getLogger(__name__)
 
-ET = pytz.timezone("US/Eastern")
+ET = pytz.timezone("America/New_York")
 
 # Cache VIX for the duration of a scan cycle to avoid redundant fetches
 _vix_cache: dict = {"value": None, "timestamp": None}
@@ -73,7 +73,7 @@ def get_premarket_data(ticker: str) -> Optional[dict]:
     global _premarket_cache
 
     # Check cache
-    now = datetime.now()
+    now = datetime.now(ET)
     cached = _premarket_cache.get(ticker)
     if cached and (now - cached["_cached_at"]).total_seconds() < _PREMARKET_CACHE_SECONDS:
         return {k: v for k, v in cached.items() if k != "_cached_at"}
@@ -420,7 +420,7 @@ def get_vix() -> tuple[Optional[float], str]:
     global _vix_cache
 
     # Check cache
-    now = datetime.now()
+    now = datetime.now(ET)
     if (_vix_cache["value"] is not None
             and _vix_cache["timestamp"]
             and (now - _vix_cache["timestamp"]).total_seconds() < _VIX_CACHE_SECONDS):
@@ -542,7 +542,7 @@ def get_current_iv(ticker: str) -> Optional[float]:
             return None
 
         # Use the nearest monthly expiration (>= 14 days out)
-        today = datetime.now().date()
+        today = datetime.now(ET).date()
         chosen = None
         for exp_str in expirations:
             exp_date = datetime.strptime(exp_str, "%Y-%m-%d").date()

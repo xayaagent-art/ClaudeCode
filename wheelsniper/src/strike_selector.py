@@ -9,6 +9,10 @@ import logging
 from datetime import datetime
 from typing import Optional
 
+import pytz
+
+ET = pytz.timezone("America/New_York")
+
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -28,7 +32,7 @@ def select_best_expiry(
     Never picks minimum DTE — always picks closest to target.
     Returns (expiry_string, dte) or (None, None).
     """
-    today = datetime.now().date()
+    today = datetime.now(ET).date()
     scored = []
     for exp in expirations:
         exp_date = datetime.strptime(exp, "%Y-%m-%d").date()

@@ -11,7 +11,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import pytz
+
 logger = logging.getLogger(__name__)
+ET = pytz.timezone("America/New_York")
 
 DB_PATH = Path(__file__).parent.parent / "wheelsniper.db"
 
@@ -89,7 +92,7 @@ def add_open_trade(
     cursor = conn.execute(
         """INSERT INTO open_trades (ticker, trade_type, strike, expiry, premium, quantity, opened_date)
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (ticker, trade_type, strike, expiry, premium, quantity, datetime.now().strftime("%Y-%m-%d")),
+        (ticker, trade_type, strike, expiry, premium, quantity, datetime.now(ET).strftime("%Y-%m-%d")),
     )
     trade_id = cursor.lastrowid
     conn.commit()
@@ -118,12 +121,12 @@ def close_trade(trade_id: int, close_premium: float) -> Optional[float]:
         (
             trade["ticker"], trade["trade_type"], trade["strike"], trade["expiry"],
             trade["premium"], close_premium, trade["quantity"],
-            trade["opened_date"], datetime.now().strftime("%Y-%m-%d"), profit,
+            trade["opened_date"], datetime.now(ET).strftime("%Y-%m-%d"), profit,
         ),
     )
 
     # Update monthly P&L
-    now = datetime.now()
+    now = datetime.now(ET)
     _update_monthly_pnl(conn, now.year, now.month, profit)
 
     conn.commit()
@@ -142,7 +145,7 @@ def get_open_trades() -> list[dict]:
 
 def get_monthly_summary(year: int = None, month: int = None) -> dict:
     """Get P&L summary for a given month (defaults to current)."""
-    now = datetime.now()
+    now = datetime.now(ET)
     year = year or now.year
     month = month or now.month
 

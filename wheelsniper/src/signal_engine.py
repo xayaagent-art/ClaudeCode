@@ -16,12 +16,17 @@ import logging
 from datetime import datetime
 from typing import Optional
 
+import pytz
 import yaml
+
+ET = pytz.timezone("America/New_York")
 
 from src.earnings_filter import has_upcoming_earnings
 from src.iv_calculator import calculate_ivr
 from src.key_levels import get_key_levels
 from src.market_data import get_market_data, get_options_chain, get_premarket_data, get_vix
+from src.sector_guard import check_sector_concentration, record_scan_sector
+from src.signal_scorer import score_signal
 from src.strike_selector import calculate_yield, select_call_strike, select_put_strike
 
 logger = logging.getLogger(__name__)
@@ -131,21 +136,42 @@ def _get_time_weighted_target(days_held: int, dte: int) -> int:
 
 
 def scan_csp_signals(config: dict = None) -> list[dict]:
-    """Scan watchlist for Cash-Secured Put entry signals."""
+    """Scan watchlist for Cash-Secured Put entry signals.
+
+    Each signal is scored 1-10. Score data is attached to the signal dict.
+    Sector guard: max 1 CSP per sector per scan, suppress if 3+ open in sector.
+    """
     config = config or load_config()
     params = config["signal_params"]
     signals = []
+    scan_sectors = {}  # Track sectors signaled this scan cycle
 
     for ticker in config["watchlist"]:
+        # Sector concentration check before full evaluation
+        sector_check = check_sector_concentration(ticker, scan_sectors)
+        if not sector_check["allowed"]:
+            logger.info(f"Skipping {ticker} CSP — {sector_check['reason']}")
+            continue
+
         signal = evaluate_csp(ticker, params)
         if signal:
+            scoring = score_signal(signal)
+            signal["score"] = scoring["score"]
+            signal["score_label"] = scoring["label"]
+            signal["score_breakdown"] = scoring["breakdown"]
+            signal["should_alert"] = scoring["should_alert"]
+            signal["sector"] = sector_check["sector"]
             signals.append(signal)
+            record_scan_sector(scan_sectors, ticker)
 
     return signals
 
 
 def scan_cc_signals(config: dict = None) -> list[dict]:
-    """Scan assigned positions for Covered Call entry signals."""
+    """Scan assigned positions for Covered Call entry signals.
+
+    Each signal is scored 1-10. Score data is attached to the signal dict.
+    """
     config = config or load_config()
     params = config["signal_params"]
     positions = config.get("positions", {}) or {}
@@ -156,6 +182,11 @@ def scan_cc_signals(config: dict = None) -> list[dict]:
             continue
         signal = evaluate_cc(ticker, pos, params)
         if signal:
+            scoring = score_signal(signal)
+            signal["score"] = scoring["score"]
+            signal["score_label"] = scoring["label"]
+            signal["score_breakdown"] = scoring["breakdown"]
+            signal["should_alert"] = scoring["should_alert"]
             signals.append(signal)
 
     return signals
@@ -554,7 +585,7 @@ def evaluate_close(trade: dict, params: dict) -> Optional[dict]:
 
     ticker = trade["ticker"]
     expiry_date = datetime.strptime(trade["expiry"], "%Y-%m-%d").date()
-    today = datetime.now().date()
+    today = datetime.now(ET).date()
     dte = (expiry_date - today).days
 
     if dte < 0:
