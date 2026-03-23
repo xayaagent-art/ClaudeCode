@@ -10,7 +10,7 @@ import os
 from datetime import datetime
 
 import pytz
-from telegram import Update
+from telegram import BotCommand, Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 logger = logging.getLogger(__name__)
@@ -497,10 +497,35 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"\U0001f50d Analyzing {ticker}...")
 
     result = analyze_ticker(ticker)
-    if result:
-        await update.message.reply_text(result)
-    else:
+    if not result:
         await update.message.reply_text(f"Could not analyze {ticker}. Check ticker or try again.")
+        return
+
+    # Truncate to stay under Telegram's 4096 char limit
+    if len(result) > 3800:
+        result = result[:3800] + "\n...(truncated)"
+
+    try:
+        await update.message.reply_text(result)
+    except Exception as e:
+        logger.error(f"/analyze send failed for {ticker}: {e}")
+        await update.message.reply_text(
+            f"Analysis ready but message too long. Try /analyze {ticker} again."
+        )
+
+
+async def _post_init(application: Application):
+    """Register command menu with BotFather after bot initializes."""
+    commands = [
+        BotCommand("status", "Bot health and status"),
+        BotCommand("scan", "Run manual signal scan"),
+        BotCommand("pnl", "Monthly P&L breakdown"),
+        BotCommand("positions", "View open positions from Notion"),
+        BotCommand("analyze", "Analyze any ticker for wheel setup"),
+        BotCommand("notion", "Check Notion connection status"),
+    ]
+    await application.bot.set_my_commands(commands)
+    logger.info("Bot commands registered with Telegram")
 
 
 def create_bot() -> Application:
@@ -511,7 +536,7 @@ def create_bot() -> Application:
         logger.error("TELEGRAM_TOKEN not set in .env")
         return None
 
-    _app = Application.builder().token(token).build()
+    _app = Application.builder().token(token).post_init(_post_init).build()
 
     _app.add_handler(CommandHandler("status", cmd_status))
     _app.add_handler(CommandHandler("scan", cmd_scan))

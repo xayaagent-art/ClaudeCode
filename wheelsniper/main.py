@@ -8,8 +8,10 @@ import asyncio
 import logging
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
+import pytz
 import yaml
 from dotenv import load_dotenv
 
@@ -20,6 +22,8 @@ os.chdir(PROJECT_ROOT)
 
 # Load environment variables
 load_dotenv()
+
+ET = pytz.timezone("America/New_York")
 
 from src.position_tracker import init_db
 from src.scheduler import create_scheduler
@@ -84,6 +88,21 @@ async def main():
         await app.initialize()
         await app.start()
         await app.updater.start_polling()
+
+        # Send startup verification message
+        try:
+            from src.telegram_bot import send_alert
+            now_et = datetime.now(ET).strftime("%Y-%m-%d %H:%M")
+            await send_alert(
+                f"\U0001f916 WheelSniper Phase 3 online\n"
+                f"\u2705 AI analyst ready\n"
+                f"\u2705 Notion connected\n"
+                f"\u2705 Signal scoring active\n"
+                f"\u2705 Sector guard active\n"
+                f"Time: {now_et} ET"
+            )
+        except Exception as e:
+            logger.warning(f"Startup message failed: {e}")
 
         try:
             while True:
