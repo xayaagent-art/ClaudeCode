@@ -1,0 +1,9 @@
+{
+  "projects": [
+    {
+      "src": "footprint",
+      "use": "@vercel/static-build",
+      "config": { "distDir": "footprint/dist" }
+    }
+  ]
+}

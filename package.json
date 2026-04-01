@@ -1,0 +1,6 @@
+{
+  "name": "claudecode-monorepo",
+  "scripts": {
+    "build": "cd footprint && npm install && npm run build"
+  }
+}
