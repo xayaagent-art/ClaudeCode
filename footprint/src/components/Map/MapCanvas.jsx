@@ -1,308 +1,122 @@
-import { useRef, useCallback, useState, useEffect } from 'react'
+import { useRef, useState, useEffect } from 'react'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
-import UnlockAnimation from './UnlockAnimation'
 
-const COUNTRY_SOURCE = 'country-boundaries'
-const COUNTRY_FILL = 'country-fill'
-const COUNTRY_FILL_UNLOCKED = 'country-fill-unlocked'
-const COUNTRY_BORDER = 'country-border'
-const COUNTRY_BORDER_UNLOCKED = 'country-border-unlocked'
-const COUNTRY_HIGHLIGHT = 'country-highlight'
+const SRC = 'country-boundaries'
+const FILL = 'country-fill'
+const FILL_U = 'country-fill-unlocked'
+const BORDER = 'country-border'
+const BORDER_U = 'country-border-unlocked'
+const HIGHLIGHT = 'country-highlight'
+const isMobile = () => window.innerWidth <= 768
 
-export default function MapCanvas({ unlocked, isUnlocked, onUnlock, onCountryInfo }) {
+export default function MapCanvas({ unlocked, isUnlocked, onUnlock, onCountryTap, mapRef: extRef }) {
   const containerRef = useRef(null)
   const mapRef = useRef(null)
-  const [mapLoaded, setMapLoaded] = useState(false)
-  const [animState, setAnimState] = useState(null) // { x, y, active }
+  const [ready, setReady] = useState(false)
+  const [loading, setLoading] = useState(true)
   const [tooltip, setTooltip] = useState(null)
-  const hoveredIdRef = useRef(null)
+  const hoveredRef = useRef(null)
+  const codes = Object.keys(unlocked)
 
-  const unlockedCodes = Object.keys(unlocked)
-
-  // Initialize map
   useEffect(() => {
     if (mapRef.current) return
-
     mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN
-
+    const mobile = isMobile()
     const map = new mapboxgl.Map({
       container: containerRef.current,
-      style: 'mapbox://styles/mapbox/dark-v11',
-      center: [20, 20],
-      zoom: 2,
-      minZoom: 1.5,
-      maxZoom: 8,
-      projection: 'mercator',
-      attributionControl: false,
+      style: 'mapbox://styles/mapbox/light-v11',
+      center: [20, 15], zoom: mobile ? 1.2 : 2,
+      minZoom: 1, maxZoom: 8, projection: 'globe',
+      attributionControl: false, dragRotate: !mobile,
+      touchPitch: false, preserveDrawingBuffer: true,
     })
 
     map.on('load', () => {
-      // Override map colors for ocean
-      const layers = map.getStyle().layers
-      layers.forEach(layer => {
-        if (layer.type === 'background') {
-          map.setPaintProperty(layer.id, 'background-color', '#080810')
-        }
-        if (layer.id === 'water') {
-          map.setPaintProperty(layer.id, 'fill-color', '#080810')
-        }
-        // Hide default country labels and fills for clean look
-        if (layer.id.includes('country-label')) {
-          map.setLayoutProperty(layer.id, 'visibility', 'none')
-        }
-        if (layer.id.includes('admin-0') && layer.type === 'line') {
-          map.setPaintProperty(layer.id, 'line-color', '#2A2A4A')
-          map.setPaintProperty(layer.id, 'line-opacity', 0.4)
+      map.setFog({
+        color: '#C8E8F5', 'high-color': '#87CEEB',
+        'horizon-blend': 0.06, 'space-color': '#4A90D9', 'star-intensity': 0.0,
+      })
+      map.getStyle().layers.forEach(l => {
+        if (l.type === 'background') map.setPaintProperty(l.id, 'background-color', '#EDE5D8')
+        if (l.id === 'water') map.setPaintProperty(l.id, 'fill-color', '#BAD9EC')
+        if (l.id.includes('country-label')) map.setLayoutProperty(l.id, 'visibility', 'none')
+        if (l.id.includes('admin-0') && l.type === 'line') {
+          map.setPaintProperty(l.id, 'line-color', '#C8C0B0')
+          map.setPaintProperty(l.id, 'line-opacity', 0.5)
         }
       })
-
-      // Add country source from Mapbox tileset
-      map.addSource(COUNTRY_SOURCE, {
-        type: 'vector',
-        url: 'mapbox://mapbox.country-boundaries-v1',
-      })
-
-      // Locked country fill
-      map.addLayer({
-        id: COUNTRY_FILL,
-        type: 'fill',
-        source: COUNTRY_SOURCE,
-        'source-layer': 'country_boundaries',
-        paint: {
-          'fill-color': '#141428',
-          'fill-opacity': 0.6,
-        },
-      })
-
-      // Unlocked country fill (filtered)
-      map.addLayer({
-        id: COUNTRY_FILL_UNLOCKED,
-        type: 'fill',
-        source: COUNTRY_SOURCE,
-        'source-layer': 'country_boundaries',
+      map.addSource(SRC, { type: 'vector', url: 'mapbox://mapbox.country-boundaries-v1' })
+      map.addLayer({ id: FILL, type: 'fill', source: SRC, 'source-layer': 'country_boundaries',
+        paint: { 'fill-color': '#DDD8CE', 'fill-opacity': 0.5 } })
+      map.addLayer({ id: FILL_U, type: 'fill', source: SRC, 'source-layer': 'country_boundaries',
         filter: ['in', 'iso_3166_1', ''],
-        paint: {
-          'fill-color': '#C9A84C',
-          'fill-opacity': [
-            'interpolate', ['linear'], ['zoom'],
-            1, 0.7,
-            5, 0.85,
-          ],
-        },
-      })
-
-      // Locked border
-      map.addLayer({
-        id: COUNTRY_BORDER,
-        type: 'line',
-        source: COUNTRY_SOURCE,
-        'source-layer': 'country_boundaries',
-        paint: {
-          'line-color': '#2A2A4A',
-          'line-opacity': 0.4,
-          'line-width': 0.5,
-        },
-      })
-
-      // Unlocked border with directional light simulation
-      map.addLayer({
-        id: COUNTRY_BORDER_UNLOCKED,
-        type: 'line',
-        source: COUNTRY_SOURCE,
-        'source-layer': 'country_boundaries',
+        paint: { 'fill-color': '#C17F4A', 'fill-opacity': ['interpolate', ['linear'], ['zoom'], 1, 0.65, 5, 0.8] } })
+      map.addLayer({ id: BORDER, type: 'line', source: SRC, 'source-layer': 'country_boundaries',
+        paint: { 'line-color': '#C8C0B0', 'line-opacity': 0.5, 'line-width': 0.5 } })
+      map.addLayer({ id: BORDER_U, type: 'line', source: SRC, 'source-layer': 'country_boundaries',
         filter: ['in', 'iso_3166_1', ''],
-        paint: {
-          'line-color': '#E8C97A',
-          'line-opacity': 0.8,
-          'line-width': 1.5,
-        },
-      })
-
-      // Hover highlight
-      map.addLayer({
-        id: COUNTRY_HIGHLIGHT,
-        type: 'line',
-        source: COUNTRY_SOURCE,
-        'source-layer': 'country_boundaries',
+        paint: { 'line-color': '#8B5E35', 'line-opacity': 0.9, 'line-width': 1.5 } })
+      map.addLayer({ id: HIGHLIGHT, type: 'line', source: SRC, 'source-layer': 'country_boundaries',
         filter: ['==', 'iso_3166_1', ''],
-        paint: {
-          'line-color': '#4A4A8A',
-          'line-opacity': 0.8,
-          'line-width': 1.5,
-        },
-      })
-
-      setMapLoaded(true)
+        paint: { 'line-color': '#8B5E35', 'line-opacity': 0.5, 'line-width': 2 } })
+      setReady(true); setLoading(false)
       mapRef.current = map
+      if (extRef) extRef.current = map
     })
-
-    return () => {
-      map.remove()
-      mapRef.current = null
-    }
+    return () => { map.remove(); mapRef.current = null; if (extRef) extRef.current = null }
   }, [])
 
-  // Update unlocked country filters when unlocked changes
   useEffect(() => {
-    const map = mapRef.current
-    if (!map || !mapLoaded) return
+    const m = mapRef.current; if (!m || !ready) return
+    const f = codes.length > 0 ? ['in', 'iso_3166_1', ...codes] : ['in', 'iso_3166_1', '']
+    m.setFilter(FILL_U, f); m.setFilter(BORDER_U, f)
+  }, [codes, ready])
 
-    const filter = unlockedCodes.length > 0
-      ? ['in', 'iso_3166_1', ...unlockedCodes]
-      : ['in', 'iso_3166_1', '']
-
-    map.setFilter(COUNTRY_FILL_UNLOCKED, filter)
-    map.setFilter(COUNTRY_BORDER_UNLOCKED, filter)
-  }, [unlockedCodes, mapLoaded])
-
-  // Map interactions (hover + click)
   useEffect(() => {
-    const map = mapRef.current
-    if (!map || !mapLoaded) return
-
-    const handleMouseMove = (e) => {
-      const features = map.queryRenderedFeatures(e.point, {
-        layers: [COUNTRY_FILL, COUNTRY_FILL_UNLOCKED],
-      })
-
-      if (features.length > 0) {
-        const iso = features[0].properties.iso_3166_1
-        const name = features[0].properties.name_en
-        map.getCanvas().style.cursor = 'pointer'
-
-        if (hoveredIdRef.current !== iso) {
-          hoveredIdRef.current = iso
-          map.setFilter(COUNTRY_HIGHLIGHT, ['==', 'iso_3166_1', iso])
-        }
-
-        if (isUnlocked(iso)) {
-          setTooltip({ x: e.point.x, y: e.point.y, name, iso })
-        } else {
-          setTooltip(null)
-        }
+    const m = mapRef.current; if (!m || !ready) return
+    const onMove = (e) => {
+      const feats = m.queryRenderedFeatures(e.point, { layers: [FILL, FILL_U] })
+      if (feats.length > 0) {
+        const iso = feats[0].properties.iso_3166_1, name = feats[0].properties.name_en
+        m.getCanvas().style.cursor = 'pointer'
+        if (hoveredRef.current !== iso) { hoveredRef.current = iso; m.setFilter(HIGHLIGHT, ['==', 'iso_3166_1', iso]) }
+        if (isUnlocked(iso) && !isMobile()) setTooltip({ x: e.point.x, y: e.point.y, name })
+        else setTooltip(null)
       } else {
-        map.getCanvas().style.cursor = ''
-        hoveredIdRef.current = null
-        map.setFilter(COUNTRY_HIGHLIGHT, ['==', 'iso_3166_1', ''])
-        setTooltip(null)
+        m.getCanvas().style.cursor = ''; hoveredRef.current = null
+        m.setFilter(HIGHLIGHT, ['==', 'iso_3166_1', '']); setTooltip(null)
       }
     }
-
-    const handleClick = (e) => {
-      const features = map.queryRenderedFeatures(e.point, {
-        layers: [COUNTRY_FILL, COUNTRY_FILL_UNLOCKED],
-      })
-
-      if (features.length === 0) return
-
-      const iso = features[0].properties.iso_3166_1
-      const name = features[0].properties.name_en
-
-      if (isUnlocked(iso)) {
-        onCountryInfo(iso, name)
-        return
-      }
-
-      // Fly to country centroid
+    const onClick = (e) => {
+      const feats = m.queryRenderedFeatures(e.point, { layers: [FILL, FILL_U] })
+      if (!feats.length) return
+      const iso = feats[0].properties.iso_3166_1, name = feats[0].properties.name_en
+      if (isUnlocked(iso)) { onCountryTap(iso, name); return }
       const bounds = new mapboxgl.LngLatBounds()
-      if (features[0].geometry.type === 'Polygon') {
-        features[0].geometry.coordinates[0].forEach(c => bounds.extend(c))
-      } else if (features[0].geometry.type === 'MultiPolygon') {
-        features[0].geometry.coordinates.forEach(poly => poly[0].forEach(c => bounds.extend(c)))
-      }
+      const g = feats[0].geometry
+      if (g.type === 'Polygon') g.coordinates[0].forEach(c => bounds.extend(c))
+      else if (g.type === 'MultiPolygon') g.coordinates.forEach(p => p[0].forEach(c => bounds.extend(c)))
       const center = bounds.getCenter()
-
-      map.flyTo({
-        center: [center.lng, center.lat],
-        zoom: Math.max(map.getZoom(), 4),
-        duration: 1200,
-        essential: true,
-        easing: t => t * (2 - t),
-      })
-
-      // Trigger unlock animation at screen position
-      const screenPoint = map.project(center)
-      setAnimState({ x: screenPoint.x, y: screenPoint.y, active: true })
-
-      // Trigger the data unlock
-      onUnlock(iso, name)
-
-      // Clear animation after sequence
-      setTimeout(() => {
-        setAnimState(null)
-      }, 2000)
+      m.flyTo({ center: [center.lng, center.lat], zoom: Math.max(m.getZoom(), 4), duration: 1200, essential: true, easing: t => 1 - Math.pow(1 - t, 3) })
+      onUnlock(iso, name, { x: m.project(center).x, y: m.project(center).y })
     }
-
-    const handleMouseLeave = () => {
-      map.getCanvas().style.cursor = ''
-      hoveredIdRef.current = null
-      map.setFilter(COUNTRY_HIGHLIGHT, ['==', 'iso_3166_1', ''])
-      setTooltip(null)
-    }
-
-    map.on('mousemove', handleMouseMove)
-    map.on('click', handleClick)
-    map.on('mouseleave', handleMouseLeave)
-
-    return () => {
-      map.off('mousemove', handleMouseMove)
-      map.off('click', handleClick)
-      map.off('mouseleave', handleMouseLeave)
-    }
-  }, [mapLoaded, isUnlocked, onUnlock, onCountryInfo])
+    const onLeave = () => { m.getCanvas().style.cursor = ''; hoveredRef.current = null; m.setFilter(HIGHLIGHT, ['==', 'iso_3166_1', '']); setTooltip(null) }
+    m.on('mousemove', onMove); m.on('click', onClick); m.on('mouseleave', onLeave)
+    return () => { m.off('mousemove', onMove); m.off('click', onClick); m.off('mouseleave', onLeave) }
+  }, [ready, isUnlocked, onUnlock, onCountryTap])
 
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
-      <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
-
-      {/* Vignette overlay */}
-      <div
-        style={{
-          position: 'absolute',
-          inset: 0,
-          pointerEvents: 'none',
-          background: 'radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.5) 100%)',
-          zIndex: 5,
-        }}
-      />
-
-      {/* Grain texture overlay */}
-      <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', opacity: 0.03, zIndex: 6 }}>
-        <filter id="grain">
-          <feTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="3" stitchTiles="stitch" />
-        </filter>
-        <rect width="100%" height="100%" filter="url(#grain)" />
-      </svg>
-
-      {/* Unlock animation overlay */}
-      {animState && (
-        <UnlockAnimation x={animState.x} y={animState.y} active={animState.active} />
+    <div style={{ position: 'relative', width: '100%', height: '100dvh', touchAction: 'none' }}>
+      {loading && (
+        <div style={{ position: 'absolute', inset: 0, zIndex: 100, background: 'linear-gradient(180deg, #C8E8F5 0%, #E8F4FD 50%, #F5F0E8 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16 }}>
+          <div style={{ width: 48, height: 48, borderRadius: '50%', border: '3px solid #DDD8CE', borderTopColor: '#C17F4A', animation: 'spin 1s linear infinite' }} />
+          <span style={{ fontFamily: 'var(--font-display)', fontSize: 18, color: 'var(--muted)', letterSpacing: '-0.02em' }}>loading your globe...</span>
+        </div>
       )}
-
-      {/* Tooltip for unlocked countries */}
+      <div ref={containerRef} style={{ width: '100%', height: '100%', touchAction: 'none' }} />
       {tooltip && (
-        <div
-          style={{
-            position: 'absolute',
-            left: tooltip.x,
-            top: tooltip.y - 40,
-            transform: 'translateX(-50%)',
-            fontFamily: "'Cormorant Garamond', serif",
-            fontSize: 15,
-            fontWeight: 600,
-            color: '#E8C97A',
-            background: 'rgba(10,10,15,0.85)',
-            backdropFilter: 'blur(8px)',
-            border: '1px solid rgba(201,168,76,0.2)',
-            borderRadius: 8,
-            padding: '5px 12px',
-            pointerEvents: 'none',
-            whiteSpace: 'nowrap',
-            zIndex: 30,
-            boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
-          }}
-        >
+        <div style={{ position: 'absolute', left: tooltip.x, top: tooltip.y - 44, transform: 'translateX(-50%)', fontFamily: 'var(--font-display)', fontSize: 15, fontWeight: 600, color: 'var(--ink)', background: 'var(--white-card)', backdropFilter: 'blur(12px)', border: '1px solid var(--sand)', borderRadius: 12, padding: '6px 14px', pointerEvents: 'none', whiteSpace: 'nowrap', zIndex: 30, boxShadow: '0 4px 16px var(--shadow)' }}>
           {tooltip.name}
         </div>
       )}

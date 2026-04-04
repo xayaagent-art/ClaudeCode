@@ -1,15 +1,20 @@
 :root {
-  --bg: #0A0A0F;
-  --map-locked: #1A1A2E;
-  --map-fog: #0D0D1A;
-  --unlocked-1: #C9A84C;
-  --unlocked-2: #E8C97A;
-  --unlocked-3: #8B6914;
-  --accent: #FF6B35;
-  --text-primary: #F5ECD7;
-  --text-muted: #6B6450;
-  --border: #2A2418;
+  --cream: #F5F0E8;
+  --parchment: #EDE5D8;
+  --sand: #DDD8CE;
+  --terracotta: #C17F4A;
+  --terracotta-light: #D4956A;
+  --terracotta-dark: #8B5E35;
+  --forest: #2D6A4F;
+  --forest-light: #3D8B68;
+  --sky: #BAD9EC;
+  --sky-light: #E8F4FD;
+  --ink: #1A1208;
+  --muted: #7A6E64;
+  --coral: #E8603A;
+  --white-card: rgba(245, 240, 232, 0.95);
+  --shadow: rgba(26, 18, 8, 0.12);
 
-  --font-display: 'Cormorant Garamond', Georgia, serif;
-  --font-body: 'DM Sans', system-ui, sans-serif;
+  --font-display: 'Fraunces', Georgia, serif;
+  --font-body: 'Nunito', system-ui, sans-serif;
 }
