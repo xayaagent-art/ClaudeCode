@@ -3,29 +3,24 @@ import MapCanvas from './components/Map/MapCanvas'
 import CelebrationOverlay from './components/Map/UnlockAnimation'
 import ParticleBurst from './components/Particles/ParticleBurst'
 import StatsBar from './components/UI/StatsBar'
-import SearchPanel from './components/UI/SearchPanel'
-import ShareButton from './components/UI/ShareButton'
+import SearchModal from './components/UI/SearchPanel'
+import BottomActions from './components/UI/ShareButton'
 import Toast from './components/UI/Toast'
 import Onboarding from './components/UI/Onboarding'
 import MilestoneCard from './components/UI/MilestoneCard'
+import CountryDrawer from './components/UI/CountryDrawer'
 import { useFootprint } from './hooks/useFootprint'
 import { captureScreenshot } from './lib/share'
+import { getCountryDescription } from './lib/ai'
 import { COUNTRY_LIST } from './data/countryList'
-import { getContinentBreakdown, CONTINENT_TOTALS } from './data/countryMeta'
+import { getContinent } from './data/countryMeta'
 
 export default function App() {
   const {
-    unlocked,
-    isUnlocked,
-    unlock,
-    getInfo,
-    countryCount,
-    continentCount,
-    percentage,
-    continentBreakdown,
-    rank,
-    nextRank,
-    countriesUntilNextRank,
+    unlocked, isUnlocked, unlock, getInfo,
+    unlockedCities, unlockCity,
+    countryCount, continentCount, percentage,
+    continentBreakdown, rank, nextRank, countriesUntilNextRank,
   } = useFootprint()
 
   const mapRef = useRef(null)
@@ -34,14 +29,17 @@ export default function App() {
   const [particles, setParticles] = useState(null)
   const [milestone, setMilestone] = useState(null)
   const [showOnboarding, setShowOnboarding] = useState(countryCount === 0)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [countryDrawer, setCountryDrawer] = useState(null)
 
-  // Dismiss onboarding on escape
   useEffect(() => {
     const handler = (e) => {
       if (e.key === 'Escape') {
         setCelebration(null)
         setMilestone(null)
         setShowOnboarding(false)
+        setSearchOpen(false)
+        setCountryDrawer(null)
       }
     }
     window.addEventListener('keydown', handler)
@@ -53,47 +51,42 @@ export default function App() {
     setTimeout(() => setToast({ visible: false, message: '' }), 3000)
   }, [])
 
-  const handleUnlock = useCallback((iso, name, screenPos) => {
+  const handleUnlock = useCallback(async (iso, name, screenPos) => {
     setShowOnboarding(false)
 
     const result = unlock(iso, name)
     if (!result.isNew) return
 
-    // Haptic feedback on mobile
-    if (navigator.vibrate) navigator.vibrate(200)
+    // Haptic feedback
+    if (navigator.vibrate) navigator.vibrate([100, 50, 100])
 
-    // Particles at screen position
+    // Particles
     if (screenPos) {
       setParticles({ x: screenPos.x, y: screenPos.y, active: true })
       setTimeout(() => setParticles(null), 2000)
     }
 
-    // Calculate continent percentage for this unlock
-    const breakdown = getContinentBreakdown([...Object.keys(unlocked), iso])
-    const contTotal = CONTINENT_TOTALS[result.continent] || 1
-    const contVisited = breakdown[result.continent] || 0
-    const contPct = Math.round((contVisited / contTotal) * 100)
+    // Fetch AI description (async, won't block)
+    let aiDescription = null
+    const descPromise = getCountryDescription(name, iso).then(d => { aiDescription = d })
 
-    // Show celebration overlay after fly animation
-    setTimeout(() => {
+    // Show celebration after fly
+    setTimeout(async () => {
+      await descPromise.catch(() => {})
       setCelebration({
-        iso,
-        name,
+        iso, name,
         continent: result.continent,
-        continentPercentage: contPct,
+        continentVisited: result.continentVisited,
+        aiDescription,
       })
-    }, 600)
+    }, 500)
 
-    // Auto-dismiss celebration
+    // Auto-dismiss after 6s
     setTimeout(() => {
-      setCelebration(prev => {
-        // Only dismiss if it's still showing this country
-        if (prev?.iso === iso) return null
-        return prev
-      })
-    }, 4600)
+      setCelebration(prev => prev?.iso === iso ? null : prev)
+    }, 6500)
 
-    // Check for milestone/rank-up (show after celebration)
+    // Milestone / rank-up
     if (result.rankUp || result.isMilestone) {
       const newCount = Object.keys(unlocked).length + 1
       setTimeout(() => {
@@ -102,29 +95,35 @@ export default function App() {
           rank: result.newRank,
           count: newCount,
         })
-      }, result.rankUp ? 5000 : 4800)
-
-      setTimeout(() => setMilestone(null), 8000)
+      }, result.rankUp ? 7000 : 6800)
+      setTimeout(() => setMilestone(null), 10000)
     }
   }, [unlock, unlocked])
 
-  const handleCountryInfo = useCallback((iso, name) => {
+  const handleCountryTap = useCallback((iso, name) => {
     const info = getInfo(iso)
     if (info) {
-      const dateStr = new Date(info.date).toLocaleDateString('en-US', {
-        month: 'short', day: 'numeric', year: 'numeric',
+      setCountryDrawer({
+        iso, name,
+        continent: info.continent,
+        date: info.date,
       })
-      showToast(`${name} · ${info.continent} · visited ${dateStr}`)
     }
-  }, [getInfo, showToast])
+  }, [getInfo])
+
+  const handleCityUnlock = useCallback((iso, city) => {
+    unlockCity(iso, city)
+    showToast(`✨ ${city} unlocked!`)
+    if (navigator.vibrate) navigator.vibrate(80)
+  }, [unlockCity, showToast])
 
   const handleSearch = useCallback((country) => {
     if (!isUnlocked(country.iso)) {
       handleUnlock(country.iso, country.name, null)
     } else {
-      handleCountryInfo(country.iso, country.name)
+      handleCountryTap(country.iso, country.name)
     }
-  }, [isUnlocked, handleUnlock, handleCountryInfo])
+  }, [isUnlocked, handleUnlock, handleCountryTap])
 
   const handleShare = useCallback(() => {
     captureScreenshot(mapRef, countryCount, continentCount, percentage, Object.keys(unlocked))
@@ -136,20 +135,17 @@ export default function App() {
         unlocked={unlocked}
         isUnlocked={isUnlocked}
         onUnlock={handleUnlock}
-        onCountryInfo={handleCountryInfo}
+        onCountryTap={handleCountryTap}
         mapRef={mapRef}
       />
 
-      {/* Wordmark */}
+      {/* Wordmark — top left */}
       <div style={{
         position: 'fixed', top: 18, left: 20, zIndex: 60,
-        fontFamily: "'Cormorant Garamond', serif",
-        fontStyle: 'italic',
-        fontSize: 24, fontWeight: 400,
-        color: 'var(--text-primary)',
-        letterSpacing: '0.2em',
+        fontFamily: 'var(--font-display)', fontStyle: 'italic',
+        fontSize: 24, fontWeight: 600,
+        color: 'var(--ink)', letterSpacing: '-0.02em',
         userSelect: 'none',
-        opacity: 0.9,
       }}>
         footprint
       </div>
@@ -157,43 +153,43 @@ export default function App() {
       <StatsBar
         countryCount={countryCount}
         continentCount={continentCount}
-        percentage={percentage}
         rank={rank}
         nextRank={nextRank}
         countriesUntilNextRank={countriesUntilNextRank}
         continentBreakdown={continentBreakdown}
       />
 
-      <SearchPanel
+      <BottomActions
+        onAddPlace={() => setSearchOpen(true)}
+        onShare={handleShare}
+      />
+
+      <SearchModal
         countries={COUNTRY_LIST}
         isUnlocked={isUnlocked}
         onSelect={handleSearch}
+        open={searchOpen}
+        onClose={() => setSearchOpen(false)}
       />
 
-      <ShareButton onClick={handleShare} />
+      <CountryDrawer
+        data={countryDrawer}
+        unlockedCities={unlockedCities}
+        onCityUnlock={handleCityUnlock}
+        onClose={() => setCountryDrawer(null)}
+      />
 
-      {/* Particle burst */}
-      {particles && (
-        <ParticleBurst x={particles.x} y={particles.y} active={particles.active} />
-      )}
+      {particles && <ParticleBurst x={particles.x} y={particles.y} active={particles.active} />}
 
-      {/* Celebration overlay */}
       <CelebrationOverlay
         data={celebration}
         onDismiss={() => setCelebration(null)}
+        onShare={handleShare}
       />
 
-      {/* Milestone card */}
-      <MilestoneCard
-        data={milestone}
-        onDismiss={() => setMilestone(null)}
-      />
+      <MilestoneCard data={milestone} onDismiss={() => setMilestone(null)} />
 
-      {/* Onboarding */}
-      <Onboarding
-        visible={showOnboarding}
-        onDismiss={() => setShowOnboarding(false)}
-      />
+      <Onboarding visible={showOnboarding} onDismiss={() => setShowOnboarding(false)} />
 
       <Toast message={toast.message} visible={toast.visible} />
     </>

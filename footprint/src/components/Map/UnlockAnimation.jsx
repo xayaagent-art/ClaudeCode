@@ -1,11 +1,14 @@
 import { motion, AnimatePresence } from 'framer-motion'
-import { isoToFlag } from '../../data/countryMeta'
-import { CONTINENT_TOTALS, getContinentBreakdown } from '../../data/countryMeta'
+import { isoToFlag, CONTINENT_TOTALS } from '../../data/countryMeta'
 
-export default function CelebrationOverlay({ data, onDismiss }) {
+const confettiColors = ['#D4A843', '#E8603A', '#2D5016', '#C8E6F5', '#F0C866', '#8B6914']
+const confettiShapes = ['circle', 'rect', 'circle', 'rect']
+
+export default function CelebrationOverlay({ data, onDismiss, onShare }) {
   if (!data) return null
-
-  const { iso, name, continent, continentPercentage } = data
+  const { iso, name, continent, continentVisited, aiDescription } = data
+  const contTotal = CONTINENT_TOTALS[continent] || 1
+  const pct = Math.round((continentVisited / contTotal) * 100)
 
   return (
     <AnimatePresence>
@@ -14,63 +17,78 @@ export default function CelebrationOverlay({ data, onDismiss }) {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          transition={{ duration: 0.3 }}
+          transition={{ duration: 0.25 }}
           onClick={onDismiss}
           style={{
             position: 'fixed', inset: 0, zIndex: 200,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: 'rgba(0,0,0,0.6)',
-            backdropFilter: 'blur(8px)',
-            WebkitBackdropFilter: 'blur(8px)',
-            cursor: 'pointer',
-            touchAction: 'manipulation',
+            display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
+            background: 'rgba(26,18,8,0.3)',
+            backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)',
+            paddingBottom: 'env(safe-area-inset-bottom, 0px)',
           }}
         >
-          {/* Gold vignette pulse at edges */}
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: [0, 0.4, 0] }}
-            transition={{ duration: 1.2, ease: 'easeOut' }}
-            style={{
-              position: 'absolute', inset: 0,
-              boxShadow: 'inset 0 0 120px 60px rgba(201,168,76,0.15)',
-              pointerEvents: 'none',
-            }}
-          />
+          {/* Confetti burst */}
+          {Array.from({ length: 24 }).map((_, i) => {
+            const shape = confettiShapes[i % confettiShapes.length]
+            const size = 6 + Math.random() * 6
+            return (
+              <motion.div
+                key={i}
+                initial={{ x: 0, y: 0, opacity: 1, rotate: 0, scale: 1 }}
+                animate={{
+                  x: (Math.random() - 0.5) * 320,
+                  y: -120 - Math.random() * 200,
+                  opacity: 0,
+                  rotate: 360 * (Math.random() > 0.5 ? 1 : -1),
+                  scale: 0.4,
+                }}
+                transition={{ duration: 1.5 + Math.random() * 0.8, delay: Math.random() * 0.3, ease: [0.16, 1, 0.3, 1] }}
+                style={{
+                  position: 'absolute', bottom: '45%', left: '50%',
+                  width: size, height: shape === 'rect' ? size * 1.5 : size,
+                  borderRadius: shape === 'circle' ? '50%' : 2,
+                  background: confettiColors[i % confettiColors.length],
+                  pointerEvents: 'none',
+                }}
+              />
+            )
+          })}
 
+          {/* Card */}
           <motion.div
-            initial={{ y: 60, opacity: 0, scale: 0.9 }}
-            animate={{ y: 0, opacity: 1, scale: 1 }}
-            exit={{ y: 40, opacity: 0, scale: 0.95 }}
-            transition={{ type: 'spring', stiffness: 300, damping: 28, delay: 0.1 }}
+            initial={{ y: '100%' }}
+            animate={{ y: 0 }}
+            exit={{ y: '100%' }}
+            transition={{ type: 'spring', stiffness: 300, damping: 28 }}
             onClick={e => e.stopPropagation()}
             style={{
+              width: '100%', maxWidth: 420,
+              background: 'var(--cream)',
+              borderRadius: '28px 28px 0 0',
+              padding: '32px 28px 36px',
               display: 'flex', flexDirection: 'column', alignItems: 'center',
-              gap: 8, padding: '40px 48px', maxWidth: 360,
-              textAlign: 'center',
+              gap: 4,
+              boxShadow: '0 -8px 40px rgba(26,18,8,0.15)',
             }}
           >
             {/* Flag */}
             <motion.div
               initial={{ scale: 0, rotate: -20 }}
               animate={{ scale: 1, rotate: 0 }}
-              transition={{ type: 'spring', stiffness: 400, damping: 20, delay: 0.2 }}
-              style={{ fontSize: 80, lineHeight: 1 }}
+              transition={{ type: 'spring', stiffness: 400, damping: 18, delay: 0.15 }}
+              style={{ fontSize: 72, lineHeight: 1, marginBottom: 4 }}
             >
               {isoToFlag(iso)}
             </motion.div>
 
             {/* Country name */}
             <motion.h1
-              initial={{ y: 20, opacity: 0 }}
+              initial={{ y: 16, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
-              transition={{ delay: 0.35, duration: 0.5 }}
+              transition={{ delay: 0.25, duration: 0.4 }}
               style={{
-                fontFamily: "'Cormorant Garamond', serif",
-                fontSize: 48, fontWeight: 700,
-                color: '#F5ECD7',
-                margin: '8px 0 0',
-                lineHeight: 1.1,
+                fontFamily: 'var(--font-display)', fontSize: 42, fontWeight: 700,
+                color: 'var(--ink)', margin: 0, lineHeight: 1.1, textAlign: 'center',
               }}
             >
               {name}
@@ -78,13 +96,12 @@ export default function CelebrationOverlay({ data, onDismiss }) {
 
             {/* Continent */}
             <motion.p
-              initial={{ y: 10, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              transition={{ delay: 0.45, duration: 0.4 }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.35 }}
               style={{
-                fontFamily: "'DM Sans', sans-serif",
-                fontSize: 16, color: 'rgba(245,236,215,0.5)',
-                marginBottom: 8,
+                fontFamily: 'var(--font-body)', fontSize: 15,
+                color: 'var(--muted)', marginBottom: 10,
               }}
             >
               {continent}
@@ -94,58 +111,98 @@ export default function CelebrationOverlay({ data, onDismiss }) {
             <motion.div
               initial={{ scale: 0 }}
               animate={{ scale: 1 }}
-              transition={{ type: 'spring', stiffness: 500, damping: 25, delay: 0.5 }}
+              transition={{ type: 'spring', stiffness: 500, damping: 22, delay: 0.4 }}
               style={{
-                fontFamily: "'DM Sans', sans-serif",
-                fontSize: 14, fontWeight: 600,
-                color: '#0A0A0F',
-                background: 'linear-gradient(135deg, #C9A84C, #E8C97A, #C9A84C)',
+                fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 700,
+                color: 'var(--ink)',
+                background: 'linear-gradient(135deg, #D4A843, #F0C866, #D4A843)',
                 backgroundSize: '200% 100%',
-                animation: 'shimmer 2s ease-in-out infinite',
-                padding: '6px 20px',
-                borderRadius: 20,
-                letterSpacing: '0.05em',
+                animation: 'shimmer 2.5s ease-in-out infinite',
+                padding: '6px 22px', borderRadius: 20,
+                letterSpacing: '0.06em', textTransform: 'uppercase',
+                marginBottom: 14,
               }}
             >
-              Unlocked!
+              ✨ Unlocked
             </motion.div>
 
-            {/* Continent stat */}
-            {continentPercentage > 0 && (
+            {/* AI description */}
+            {aiDescription && (
               <motion.p
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                transition={{ delay: 0.7, duration: 0.4 }}
+                transition={{ delay: 0.6 }}
                 style={{
-                  fontFamily: "'DM Sans', sans-serif",
-                  fontSize: 13, color: 'rgba(245,236,215,0.4)',
-                  marginTop: 12,
+                  fontFamily: 'var(--font-display)', fontStyle: 'italic',
+                  fontSize: 16, color: 'var(--muted)', textAlign: 'center',
+                  lineHeight: 1.5, maxWidth: 320, marginBottom: 8,
                 }}
               >
-                You've now visited {continentPercentage}% of {continent}
+                "{aiDescription}"
               </motion.p>
             )}
 
-            <motion.p
+            {/* Continent progress */}
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.55 }}
+              style={{ width: '100%', maxWidth: 280, marginTop: 4 }}
+            >
+              <div style={{
+                fontFamily: 'var(--font-body)', fontSize: 12,
+                color: 'var(--muted)', textAlign: 'center', marginBottom: 6,
+              }}>
+                You've explored {continentVisited} of {contTotal} countries in {continent}
+              </div>
+              <div style={{
+                width: '100%', height: 6, borderRadius: 3,
+                background: 'var(--sand)',
+                overflow: 'hidden',
+              }}>
+                <motion.div
+                  initial={{ width: 0 }}
+                  animate={{ width: `${pct}%` }}
+                  transition={{ duration: 0.8, delay: 0.7, ease: [0.16, 1, 0.3, 1] }}
+                  style={{
+                    height: '100%', borderRadius: 3,
+                    background: 'linear-gradient(90deg, #D4A843, #F0C866)',
+                  }}
+                />
+              </div>
+            </motion.div>
+
+            {/* Action buttons */}
+            <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              transition={{ delay: 1, duration: 0.4 }}
-              style={{
-                fontFamily: "'DM Sans', sans-serif",
-                fontSize: 11, color: 'rgba(245,236,215,0.25)',
-                marginTop: 16,
-              }}
+              transition={{ delay: 0.8 }}
+              style={{ display: 'flex', gap: 10, marginTop: 18, width: '100%', maxWidth: 280 }}
             >
-              tap anywhere to continue
-            </motion.p>
+              <button
+                onClick={(e) => { e.stopPropagation(); onShare?.() }}
+                style={{
+                  flex: 1, padding: '12px 16px', borderRadius: 14,
+                  border: '1px solid var(--sand)', background: 'white',
+                  fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 600,
+                  color: 'var(--ink)', cursor: 'pointer',
+                }}
+              >
+                Share this
+              </button>
+              <button
+                onClick={onDismiss}
+                style={{
+                  flex: 1, padding: '12px 16px', borderRadius: 14,
+                  border: 'none', background: 'var(--gold)',
+                  fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 600,
+                  color: 'var(--ink)', cursor: 'pointer',
+                }}
+              >
+                Done
+              </button>
+            </motion.div>
           </motion.div>
-
-          <style>{`
-            @keyframes shimmer {
-              0% { background-position: 200% 0; }
-              100% { background-position: -200% 0; }
-            }
-          `}</style>
         </motion.div>
       )}
     </AnimatePresence>

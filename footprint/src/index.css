@@ -15,8 +15,8 @@ html, body {
 
 body {
   font-family: var(--font-body);
-  background: var(--bg);
-  color: var(--text-primary);
+  background: var(--cream);
+  color: var(--ink);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -40,8 +40,6 @@ body {
   display: none !important;
 }
 
-@media (max-width: 768px) {
-  .mapboxgl-ctrl-group {
-    display: none !important;
-  }
+.mapboxgl-ctrl-group {
+  display: none !important;
 }

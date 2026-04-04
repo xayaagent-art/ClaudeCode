@@ -1,15 +1,17 @@
 :root {
-  --bg: #0A0A0F;
-  --map-locked: #1C1C2E;
-  --map-fog: #0D0D1A;
-  --unlocked-1: #C9A84C;
-  --unlocked-2: #E8C97A;
-  --unlocked-3: #8B6914;
-  --accent: #E8854A;
-  --text-primary: #F5ECD7;
-  --text-muted: #6B6450;
-  --border: #2A2418;
+  --cream: #FAF7F2;
+  --sand: #E8DCC8;
+  --earth: #8B6914;
+  --gold: #D4A843;
+  --gold-light: #F0C866;
+  --forest: #2D5016;
+  --sky: #C8E6F5;
+  --coral: #E8603A;
+  --ink: #1A1208;
+  --muted: #8A7A6A;
+  --card-bg: rgba(250, 247, 242, 0.92);
+  --shadow: rgba(26, 18, 8, 0.12);
 
-  --font-display: 'Cormorant Garamond', Georgia, serif;
-  --font-body: 'DM Sans', system-ui, sans-serif;
+  --font-display: 'Fraunces', Georgia, serif;
+  --font-body: 'Nunito', system-ui, sans-serif;
 }

@@ -8,7 +8,7 @@ export default function Onboarding({ visible, onDismiss }) {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          transition={{ duration: 0.5 }}
+          transition={{ duration: 0.4 }}
           onClick={onDismiss}
           style={{
             position: 'fixed', inset: 0, zIndex: 80,
@@ -17,60 +17,55 @@ export default function Onboarding({ visible, onDismiss }) {
           }}
         >
           <motion.div
-            initial={{ y: 20, opacity: 0, scale: 0.95 }}
+            initial={{ y: 24, opacity: 0, scale: 0.95 }}
             animate={{ y: 0, opacity: 1, scale: 1 }}
-            exit={{ y: -20, opacity: 0, scale: 0.95 }}
-            transition={{ type: 'spring', stiffness: 300, damping: 28, delay: 0.5 }}
+            exit={{ y: -16, opacity: 0, scale: 0.95 }}
+            transition={{ type: 'spring', stiffness: 300, damping: 28, delay: 0.6 }}
             style={{
               display: 'flex', flexDirection: 'column', alignItems: 'center',
-              gap: 12, padding: '36px 44px',
-              background: 'rgba(10,10,15,0.7)',
-              backdropFilter: 'blur(20px)',
-              WebkitBackdropFilter: 'blur(20px)',
-              border: '1px solid rgba(255,255,255,0.08)',
-              borderRadius: 24,
-              textAlign: 'center',
-              maxWidth: 340,
+              gap: 10, padding: '36px 44px',
+              background: 'var(--card-bg)',
+              backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)',
+              border: '1px solid var(--sand)',
+              borderRadius: 28,
+              textAlign: 'center', maxWidth: 340,
+              boxShadow: '0 8px 40px var(--shadow)',
             }}
           >
+            {/* Spinning globe */}
+            <motion.div
+              animate={{ rotate: 360 }}
+              transition={{ duration: 10, repeat: Infinity, ease: 'linear' }}
+              style={{ fontSize: 64, lineHeight: 1 }}
+            >
+              🌍
+            </motion.div>
+
             <h2 style={{
-              fontFamily: "'Cormorant Garamond', serif",
-              fontSize: 32, fontWeight: 400,
-              color: '#F5ECD7',
-              lineHeight: 1.2,
-              margin: 0,
+              fontFamily: 'var(--font-display)', fontSize: 32, fontWeight: 600,
+              color: 'var(--ink)', lineHeight: 1.2, margin: 0,
             }}>
-              your world is waiting
+              Where have you been?
             </h2>
 
             <p style={{
-              fontFamily: "'DM Sans', sans-serif",
-              fontSize: 16, color: 'rgba(245,236,215,0.5)',
-              lineHeight: 1.5,
+              fontFamily: 'var(--font-body)', fontSize: 16,
+              color: 'var(--muted)', lineHeight: 1.5,
             }}>
-              tap any country you've visited to unlock it
+              Tap any country you've visited to unlock it
             </p>
 
-            {/* Pulsing dots */}
-            <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
+            {/* Pulsing gold dots */}
+            <div style={{ display: 'flex', gap: 12, marginTop: 6 }}>
               {[0, 1, 2].map(i => (
                 <motion.div
                   key={i}
-                  animate={{
-                    scale: [1, 1.6, 1],
-                    opacity: [0.4, 1, 0.4],
-                  }}
-                  transition={{
-                    duration: 2,
-                    delay: i * 0.4,
-                    repeat: Infinity,
-                    ease: 'easeInOut',
-                  }}
+                  animate={{ scale: [1, 1.5, 1], opacity: [0.4, 1, 0.4] }}
+                  transition={{ duration: 2, delay: i * 0.3, repeat: Infinity, ease: 'easeInOut' }}
                   style={{
-                    width: 8, height: 8,
-                    borderRadius: '50%',
-                    background: '#C9A84C',
-                    boxShadow: '0 0 8px rgba(201,168,76,0.5)',
+                    width: 10, height: 10, borderRadius: '50%',
+                    background: 'var(--gold)',
+                    boxShadow: '0 0 8px rgba(212,168,67,0.4)',
                   }}
                 />
               ))}
