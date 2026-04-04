@@ -3,16 +3,19 @@ import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import { getContinent } from '../../data/countryMeta'
 import { CONTINENT_COLORS } from '../../data/continentColors'
+import { getCityCompletionOpacity } from '../../data/cityProgress'
 
 const SRC = 'country-boundaries'
 const FILL = 'country-fill'
 const FILL_U = 'country-fill-unlocked'
+const FILL_W = 'country-fill-wishlist'
 const BORDER = 'country-border'
 const BORDER_U = 'country-border-unlocked'
+const BORDER_W = 'country-border-wishlist'
 const HIGHLIGHT = 'country-highlight'
 const isMobile = () => window.innerWidth <= 768
 
-export default function MapCanvas({ unlocked, isUnlocked, onUnlock, onCountryTap, mapRef: extRef }) {
+export default function MapCanvas({ unlocked, isUnlocked, onUnlock, onCountryTap, onLockedTap, mapRef: extRef, unlockedCities, wishlist }) {
   const containerRef = useRef(null)
   const mapRef = useRef(null)
   const [ready, setReady] = useState(false)
@@ -52,13 +55,21 @@ export default function MapCanvas({ unlocked, isUnlocked, onUnlock, onCountryTap
       // Locked countries base fill
       map.addLayer({ id: FILL, type: 'fill', source: SRC, 'source-layer': 'country_boundaries',
         paint: { 'fill-color': '#E8E4DC', 'fill-opacity': 0.6 } })
-      // Unlocked countries — continent color applied via match expression
+      // Wishlist countries — very faint continent color
+      map.addLayer({ id: FILL_W, type: 'fill', source: SRC, 'source-layer': 'country_boundaries',
+        filter: ['in', 'iso_3166_1', ''],
+        paint: { 'fill-color': '#E8E4DC', 'fill-opacity': 0.12 } })
+      // Unlocked countries — continent color with city-progress opacity
       map.addLayer({ id: FILL_U, type: 'fill', source: SRC, 'source-layer': 'country_boundaries',
         filter: ['in', 'iso_3166_1', ''],
-        paint: { 'fill-color': '#E8E4DC', 'fill-opacity': 1.0 } })
+        paint: { 'fill-color': '#E8E4DC', 'fill-opacity': 0.28 } })
       // Locked borders
       map.addLayer({ id: BORDER, type: 'line', source: SRC, 'source-layer': 'country_boundaries',
         paint: { 'line-color': 'rgba(0,0,0,0.08)', 'line-opacity': 0.6, 'line-width': 0.5 } })
+      // Wishlist borders — dashed
+      map.addLayer({ id: BORDER_W, type: 'line', source: SRC, 'source-layer': 'country_boundaries',
+        filter: ['in', 'iso_3166_1', ''],
+        paint: { 'line-color': '#717171', 'line-opacity': 0.4, 'line-width': 1, 'line-dasharray': [2, 2] } })
       // Unlocked borders
       map.addLayer({ id: BORDER_U, type: 'line', source: SRC, 'source-layer': 'country_boundaries',
         filter: ['in', 'iso_3166_1', ''],
@@ -74,15 +85,15 @@ export default function MapCanvas({ unlocked, isUnlocked, onUnlock, onCountryTap
     return () => { map.remove(); mapRef.current = null; if (extRef) extRef.current = null }
   }, [])
 
-  // Update filters and continent-based fill colors when unlocked changes
+  // Update unlocked country fills with continent colors + city-progress opacity
   useEffect(() => {
     const m = mapRef.current; if (!m || !ready) return
     const f = codes.length > 0 ? ['in', 'iso_3166_1', ...codes] : ['in', 'iso_3166_1', '']
     m.setFilter(FILL_U, f)
     m.setFilter(BORDER_U, f)
 
-    // Build match expression for continent colors
     if (codes.length > 0) {
+      // Color match expression
       const colorEntries = codes.flatMap(iso => {
         const continent = getContinent(iso)
         return [iso, CONTINENT_COLORS[continent] || '#717171']
@@ -92,13 +103,77 @@ export default function MapCanvas({ unlocked, isUnlocked, onUnlock, onCountryTap
         ...colorEntries,
         '#E8E4DC'
       ])
+
+      // Opacity match expression based on city progress
+      const opacityEntries = codes.flatMap(iso => {
+        const opacity = getCityCompletionOpacity(iso, unlockedCities || {})
+        return [iso, opacity]
+      })
+      m.setPaintProperty(FILL_U, 'fill-opacity', [
+        'match', ['get', 'iso_3166_1'],
+        ...opacityEntries,
+        0.0
+      ])
+
+      // Border: thicker for fully explored countries
+      const widthEntries = codes.flatMap(iso => {
+        const opacity = getCityCompletionOpacity(iso, unlockedCities || {})
+        return [iso, opacity >= 1.0 ? 2.5 : 1.5]
+      })
+      m.setPaintProperty(BORDER_U, 'line-width', [
+        'match', ['get', 'iso_3166_1'],
+        ...widthEntries,
+        0.5
+      ])
+
+      // Border color: continent color for fully explored
+      const borderColorEntries = codes.flatMap(iso => {
+        const continent = getContinent(iso)
+        const opacity = getCityCompletionOpacity(iso, unlockedCities || {})
+        return [iso, opacity >= 1.0 ? (CONTINENT_COLORS[continent] || '#222') : 'rgba(0,0,0,0.15)']
+      })
+      m.setPaintProperty(BORDER_U, 'line-color', [
+        'match', ['get', 'iso_3166_1'],
+        ...borderColorEntries,
+        'rgba(0,0,0,0.15)'
+      ])
     }
-  }, [codes, ready])
+  }, [codes, ready, unlockedCities])
+
+  // Update wishlist layer
+  useEffect(() => {
+    const m = mapRef.current; if (!m || !ready) return
+    const wl = wishlist || []
+    const f = wl.length > 0 ? ['in', 'iso_3166_1', ...wl] : ['in', 'iso_3166_1', '']
+    m.setFilter(FILL_W, f)
+    m.setFilter(BORDER_W, f)
+
+    if (wl.length > 0) {
+      const colorEntries = wl.flatMap(iso => {
+        const continent = getContinent(iso)
+        return [iso, CONTINENT_COLORS[continent] || '#717171']
+      })
+      m.setPaintProperty(FILL_W, 'fill-color', [
+        'match', ['get', 'iso_3166_1'],
+        ...colorEntries,
+        '#E8E4DC'
+      ])
+      const borderColorEntries = wl.flatMap(iso => {
+        const continent = getContinent(iso)
+        return [iso, CONTINENT_COLORS[continent] || '#717171']
+      })
+      m.setPaintProperty(BORDER_W, 'line-color', [
+        'match', ['get', 'iso_3166_1'],
+        ...borderColorEntries,
+        '#717171'
+      ])
+    }
+  }, [wishlist, ready])
 
   useEffect(() => {
     const m = mapRef.current; if (!m || !ready) return
     const onMove = (e) => {
-      const feats = m.queryRenderedFeatures(e.point, { layers: [FILL, FILL_U] })
+      const feats = m.queryRenderedFeatures(e.point, { layers: [FILL, FILL_U, FILL_W] })
       if (feats.length > 0) {
         const iso = feats[0].properties.iso_3166_1, name = feats[0].properties.name_en
         m.getCanvas().style.cursor = 'pointer'
@@ -111,22 +186,23 @@ export default function MapCanvas({ unlocked, isUnlocked, onUnlock, onCountryTap
       }
     }
     const onClick = (e) => {
-      const feats = m.queryRenderedFeatures(e.point, { layers: [FILL, FILL_U] })
+      const feats = m.queryRenderedFeatures(e.point, { layers: [FILL, FILL_U, FILL_W] })
       if (!feats.length) return
       const iso = feats[0].properties.iso_3166_1, name = feats[0].properties.name_en
       if (isUnlocked(iso)) { onCountryTap(iso, name); return }
+      // Locked country — show action sheet
       const bounds = new mapboxgl.LngLatBounds()
       const g = feats[0].geometry
       if (g.type === 'Polygon') g.coordinates[0].forEach(c => bounds.extend(c))
       else if (g.type === 'MultiPolygon') g.coordinates.forEach(p => p[0].forEach(c => bounds.extend(c)))
       const center = bounds.getCenter()
-      m.flyTo({ center: [center.lng, center.lat], zoom: Math.max(m.getZoom(), 4), duration: 1200, essential: true, easing: t => 1 - Math.pow(1 - t, 3) })
-      onUnlock(iso, name, { x: m.project(center).x, y: m.project(center).y })
+      const screenPos = { x: m.project(center).x, y: m.project(center).y }
+      onLockedTap(iso, name, screenPos)
     }
     const onLeave = () => { m.getCanvas().style.cursor = ''; hoveredRef.current = null; m.setFilter(HIGHLIGHT, ['==', 'iso_3166_1', '']); setTooltip(null) }
     m.on('mousemove', onMove); m.on('click', onClick); m.on('mouseleave', onLeave)
     return () => { m.off('mousemove', onMove); m.off('click', onClick); m.off('mouseleave', onLeave) }
-  }, [ready, isUnlocked, onUnlock, onCountryTap])
+  }, [ready, isUnlocked, onCountryTap, onLockedTap])
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100dvh', touchAction: 'none' }}>

@@ -10,6 +10,7 @@ import Toast from './components/UI/Toast'
 import Onboarding from './components/UI/Onboarding'
 import MilestoneCard from './components/UI/MilestoneCard'
 import CountryDrawer from './components/UI/CountryDrawer'
+import LockedActionSheet from './components/UI/LockedActionSheet'
 import SettingsSheet from './components/UI/SettingsSheet'
 import { useFootprint } from './hooks/useFootprint'
 import { captureScreenshot } from './lib/share'
@@ -21,6 +22,7 @@ export default function App() {
     unlocked, isUnlocked, unlock, getInfo,
     unlockedCities, unlockCity,
     notes, saveNote,
+    wishlist, isWishlisted, addToWishlist, removeFromWishlist, wishlistCount,
     countryCount, continentCount, percentage, totalCityCount,
     continentBreakdown, rank, nextRank, countriesUntilNextRank,
   } = useFootprint()
@@ -34,6 +36,7 @@ export default function App() {
   const [searchOpen, setSearchOpen] = useState(false)
   const [countryDrawer, setCountryDrawer] = useState(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [lockedAction, setLockedAction] = useState(null)
 
   useEffect(() => {
     const handler = (e) => {
@@ -44,6 +47,7 @@ export default function App() {
         setSearchOpen(false)
         setCountryDrawer(null)
         setSettingsOpen(false)
+        setLockedAction(null)
       }
     }
     window.addEventListener('keydown', handler)
@@ -67,7 +71,7 @@ export default function App() {
       particleCount: 30,
       spread: 60,
       origin: { y: 0.6 },
-      colors: ['#FF5A5F', '#00A699', '#FC642D', '#F5A623', '#4A90D9'],
+      colors: ['#C44B6E', '#2E8B7A', '#C8883A', '#B87333', '#4A7FB5'],
     })
 
     // Particles at click position
@@ -120,6 +124,23 @@ export default function App() {
     }
   }, [getInfo])
 
+  const handleLockedTap = useCallback((iso, name) => {
+    setLockedAction({ iso, name })
+  }, [])
+
+  const handleLockedUnlock = useCallback(() => {
+    if (lockedAction) {
+      handleUnlock(lockedAction.iso, lockedAction.name, null)
+    }
+  }, [lockedAction, handleUnlock])
+
+  const handleLockedWishlist = useCallback(() => {
+    if (lockedAction) {
+      addToWishlist(lockedAction.iso)
+      showToast(`♡ ${lockedAction.name} added to wishlist`)
+    }
+  }, [lockedAction, addToWishlist, showToast])
+
   const handleExploreCities = useCallback(() => {
     if (celebration) {
       const { iso, name, continent } = celebration
@@ -155,7 +176,10 @@ export default function App() {
         isUnlocked={isUnlocked}
         onUnlock={handleUnlock}
         onCountryTap={handleCountryTap}
+        onLockedTap={handleLockedTap}
         mapRef={mapRef}
+        unlockedCities={unlockedCities}
+        wishlist={wishlist}
       />
 
       <StatsBar
@@ -165,6 +189,8 @@ export default function App() {
         nextRank={nextRank}
         countriesUntilNextRank={countriesUntilNextRank}
         continentBreakdown={continentBreakdown}
+        wishlistCount={wishlistCount}
+        wishlist={wishlist}
         onOpenSettings={() => setSettingsOpen(true)}
       />
 
@@ -209,6 +235,13 @@ export default function App() {
       <MilestoneCard data={milestone} onDismiss={() => setMilestone(null)} />
 
       <Onboarding visible={showOnboarding} onDismiss={() => setShowOnboarding(false)} />
+
+      <LockedActionSheet
+        data={lockedAction}
+        onUnlock={handleLockedUnlock}
+        onWishlist={handleLockedWishlist}
+        onClose={() => setLockedAction(null)}
+      />
 
       <Toast message={toast.message} visible={toast.visible} />
     </>

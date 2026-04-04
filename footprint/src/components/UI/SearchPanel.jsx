@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { isoToFlag, getContinent } from '../../data/countryMeta'
 import { getContinentColor } from '../../data/continentColors'
+import { getCities } from '../../data/cities'
 
 export default function SearchPanel({ countries, isUnlocked, onSelect, open, onClose }) {
   const [query, setQuery] = useState('')
@@ -14,8 +15,17 @@ export default function SearchPanel({ countries, isUnlocked, onSelect, open, onC
     }
   }, [open])
 
-  const filtered = query.length > 0
-    ? countries.filter(c => c.name.toLowerCase().includes(query.toLowerCase())).slice(0, 30)
+  const q = query.toLowerCase()
+  const filtered = q.length > 0
+    ? (() => {
+        const countryMatches = countries.filter(c => c.name.toLowerCase().includes(q))
+        // Also search cities — find countries whose cities match
+        const cityMatches = countries.filter(c => {
+          if (countryMatches.some(m => m.iso === c.iso)) return false
+          return getCities(c.iso).some(city => city.toLowerCase().includes(q))
+        })
+        return [...countryMatches, ...cityMatches].slice(0, 30)
+      })()
     : countries
 
   const handleSelect = useCallback((country) => {
@@ -72,7 +82,7 @@ export default function SearchPanel({ countries, isUnlocked, onSelect, open, onC
                 <input
                   ref={inputRef}
                   type="text"
-                  placeholder="Search countries..."
+                  placeholder="Search countries or cities..."
                   value={query}
                   onChange={e => setQuery(e.target.value)}
                   style={{
@@ -108,13 +118,16 @@ export default function SearchPanel({ countries, isUnlocked, onSelect, open, onC
                 const unlocked = isUnlocked(c.iso)
                 const continent = getContinent(c.iso)
                 const contColor = getContinentColor(continent)
+                const matchingCity = q.length > 0 && !c.name.toLowerCase().includes(q)
+                  ? getCities(c.iso).find(city => city.toLowerCase().includes(q))
+                  : null
                 return (
                   <button
                     key={c.iso}
                     onClick={() => handleSelect(c)}
                     style={{
                       display: 'flex', alignItems: 'center', gap: 12,
-                      width: '100%', height: 52, padding: '0 20px',
+                      width: '100%', minHeight: 52, padding: '8px 20px',
                       border: 'none', background: 'transparent',
                       fontFamily: 'var(--font-body)', fontSize: 15, fontWeight: 500,
                       color: '#222', cursor: 'pointer',
@@ -122,7 +135,14 @@ export default function SearchPanel({ countries, isUnlocked, onSelect, open, onC
                     }}
                   >
                     <span style={{ fontSize: 22, width: 32, textAlign: 'center' }}>{isoToFlag(c.iso)}</span>
-                    <span style={{ flex: 1 }}>{c.name}</span>
+                    <span style={{ flex: 1 }}>
+                      {c.name}
+                      {matchingCity && (
+                        <span style={{ display: 'block', fontSize: 12, color: '#717171', fontWeight: 400 }}>
+                          📍 {matchingCity}
+                        </span>
+                      )}
+                    </span>
                     <span style={{
                       fontSize: 11, fontWeight: 600, color: contColor,
                       background: `${contColor}15`, borderRadius: 6,

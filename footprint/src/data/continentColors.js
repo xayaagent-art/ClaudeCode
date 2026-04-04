@@ -1,11 +1,11 @@
 export const CONTINENT_COLORS = {
-  'Europe': '#E8445A',
-  'Asia': '#00968A',
-  'North America': '#F5A623',
-  'South America': '#F5A623',
-  'Africa': '#E8703A',
-  'Oceania': '#4A90D9',
-  'Antarctica': '#9B59B6',
+  'Europe': '#C44B6E',
+  'Asia': '#2E8B7A',
+  'North America': '#C8883A',
+  'South America': '#B87333',
+  'Africa': '#C67B3A',
+  'Oceania': '#4A7FB5',
+  'Antarctica': '#8B7AB5',
 }
 
 export function getContinentColor(continent) {
