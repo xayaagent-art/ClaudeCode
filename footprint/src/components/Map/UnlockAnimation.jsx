@@ -1,14 +1,52 @@
 import { motion, AnimatePresence } from 'framer-motion'
 import { isoToFlag, CONTINENT_TOTALS } from '../../data/countryMeta'
+import { getIllustration } from '../../data/countryIllustrations'
 
-const confettiColors = ['#D4A843', '#E8603A', '#2D5016', '#C8E6F5', '#F0C866', '#8B6914']
-const confettiShapes = ['circle', 'rect', 'circle', 'rect']
+function EmojiCollage({ emojis }) {
+  const positions = [
+    { left: '50%', top: '45%', size: 64, delay: 0.2, rotate: 0 },
+    { left: '20%', top: '25%', size: 44, delay: 0.3, rotate: -12 },
+    { left: '75%', top: '20%', size: 40, delay: 0.35, rotate: 10 },
+    { left: '30%', top: '70%', size: 42, delay: 0.4, rotate: -8 },
+    { left: '70%', top: '65%', size: 46, delay: 0.45, rotate: 15 },
+    { left: '15%', top: '50%', size: 38, delay: 0.5, rotate: -14 },
+  ]
 
-export default function CelebrationOverlay({ data, onDismiss, onShare }) {
+  return emojis.slice(0, 6).map((emoji, i) => {
+    const p = positions[i]
+    return (
+      <motion.span
+        key={i}
+        initial={{ scale: 0, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1, y: [0, -4, 0] }}
+        transition={{
+          scale: { type: 'spring', stiffness: 400, damping: 18, delay: p.delay },
+          opacity: { duration: 0.3, delay: p.delay },
+          y: { duration: 3, repeat: Infinity, ease: 'easeInOut', delay: i * 0.4 },
+        }}
+        style={{
+          position: 'absolute',
+          left: p.left, top: p.top,
+          transform: `translate(-50%, -50%) rotate(${p.rotate}deg)`,
+          fontSize: p.size,
+          lineHeight: 1,
+          filter: 'drop-shadow(0 2px 8px rgba(0,0,0,0.15))',
+          zIndex: i === 0 ? 2 : 1,
+        }}
+      >
+        {emoji}
+      </motion.span>
+    )
+  })
+}
+
+export default function CelebrationOverlay({ data, onDismiss, onShare, onExploreCities }) {
   if (!data) return null
   const { iso, name, continent, continentVisited, aiDescription } = data
   const contTotal = CONTINENT_TOTALS[continent] || 1
   const pct = Math.round((continentVisited / contTotal) * 100)
+  const illustration = getIllustration(iso, continent)
+  const dateStr = new Date().toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
 
   return (
     <AnimatePresence>
@@ -27,33 +65,6 @@ export default function CelebrationOverlay({ data, onDismiss, onShare }) {
             paddingBottom: 'env(safe-area-inset-bottom, 0px)',
           }}
         >
-          {/* Confetti burst */}
-          {Array.from({ length: 24 }).map((_, i) => {
-            const shape = confettiShapes[i % confettiShapes.length]
-            const size = 6 + Math.random() * 6
-            return (
-              <motion.div
-                key={i}
-                initial={{ x: 0, y: 0, opacity: 1, rotate: 0, scale: 1 }}
-                animate={{
-                  x: (Math.random() - 0.5) * 320,
-                  y: -120 - Math.random() * 200,
-                  opacity: 0,
-                  rotate: 360 * (Math.random() > 0.5 ? 1 : -1),
-                  scale: 0.4,
-                }}
-                transition={{ duration: 1.5 + Math.random() * 0.8, delay: Math.random() * 0.3, ease: [0.16, 1, 0.3, 1] }}
-                style={{
-                  position: 'absolute', bottom: '45%', left: '50%',
-                  width: size, height: shape === 'rect' ? size * 1.5 : size,
-                  borderRadius: shape === 'circle' ? '50%' : 2,
-                  background: confettiColors[i % confettiColors.length],
-                  pointerEvents: 'none',
-                }}
-              />
-            )
-          })}
-
           {/* Card */}
           <motion.div
             initial={{ y: '100%' }}
@@ -63,145 +74,156 @@ export default function CelebrationOverlay({ data, onDismiss, onShare }) {
             onClick={e => e.stopPropagation()}
             style={{
               width: '100%', maxWidth: 420,
-              background: 'var(--cream)',
               borderRadius: '28px 28px 0 0',
-              padding: '32px 28px 36px',
-              display: 'flex', flexDirection: 'column', alignItems: 'center',
-              gap: 4,
+              overflow: 'hidden',
               boxShadow: '0 -8px 40px rgba(26,18,8,0.15)',
             }}
           >
-            {/* Flag */}
-            <motion.div
-              initial={{ scale: 0, rotate: -20 }}
-              animate={{ scale: 1, rotate: 0 }}
-              transition={{ type: 'spring', stiffness: 400, damping: 18, delay: 0.15 }}
-              style={{ fontSize: 72, lineHeight: 1, marginBottom: 4 }}
-            >
-              {isoToFlag(iso)}
-            </motion.div>
+            {/* TOP HALF — Illustration zone */}
+            <div style={{
+              position: 'relative', height: 200,
+              background: illustration.gradient,
+              overflow: 'hidden',
+            }}>
+              {/* Subtle overlay for readability */}
+              <div style={{
+                position: 'absolute', inset: 0,
+                background: 'radial-gradient(ellipse at center, rgba(255,255,255,0.15) 0%, transparent 70%)',
+              }} />
+              <EmojiCollage emojis={illustration.emojis} />
+              {/* Unlocked badge */}
+              <motion.div
+                initial={{ scale: 0 }}
+                animate={{ scale: 1 }}
+                transition={{ type: 'spring', stiffness: 500, damping: 22, delay: 0.5 }}
+                style={{
+                  position: 'absolute', bottom: 12, right: 16,
+                  fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 700,
+                  color: 'white', background: 'rgba(0,0,0,0.3)',
+                  backdropFilter: 'blur(8px)',
+                  padding: '5px 14px', borderRadius: 20,
+                  letterSpacing: '0.06em', textTransform: 'uppercase',
+                }}
+              >
+                ✨ Unlocked
+              </motion.div>
+            </div>
 
-            {/* Country name */}
-            <motion.h1
-              initial={{ y: 16, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              transition={{ delay: 0.25, duration: 0.4 }}
-              style={{
-                fontFamily: 'var(--font-display)', fontSize: 42, fontWeight: 700,
-                color: 'var(--ink)', margin: 0, lineHeight: 1.1, textAlign: 'center',
-              }}
-            >
-              {name}
-            </motion.h1>
+            {/* BOTTOM HALF — Info zone */}
+            <div style={{
+              background: 'var(--cream)',
+              padding: '24px 28px 32px',
+              display: 'flex', flexDirection: 'column', alignItems: 'center',
+              gap: 6,
+            }}>
+              {/* Flag + Name */}
+              <motion.div
+                initial={{ y: 12, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                transition={{ delay: 0.25, duration: 0.4 }}
+                style={{ textAlign: 'center' }}
+              >
+                <div style={{ fontSize: 32, lineHeight: 1, marginBottom: 6 }}>
+                  {isoToFlag(iso)}
+                </div>
+                <h1 style={{
+                  fontFamily: 'var(--font-display)', fontSize: 36, fontWeight: 700,
+                  color: 'var(--ink)', margin: 0, lineHeight: 1.1,
+                }}>
+                  {name}
+                </h1>
+              </motion.div>
 
-            {/* Continent */}
-            <motion.p
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 0.35 }}
-              style={{
-                fontFamily: 'var(--font-body)', fontSize: 15,
-                color: 'var(--muted)', marginBottom: 10,
-              }}
-            >
-              {continent}
-            </motion.p>
-
-            {/* Unlocked badge */}
-            <motion.div
-              initial={{ scale: 0 }}
-              animate={{ scale: 1 }}
-              transition={{ type: 'spring', stiffness: 500, damping: 22, delay: 0.4 }}
-              style={{
-                fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 700,
-                color: 'var(--ink)',
-                background: 'linear-gradient(135deg, #D4A843, #F0C866, #D4A843)',
-                backgroundSize: '200% 100%',
-                animation: 'shimmer 2.5s ease-in-out infinite',
-                padding: '6px 22px', borderRadius: 20,
-                letterSpacing: '0.06em', textTransform: 'uppercase',
-                marginBottom: 14,
-              }}
-            >
-              ✨ Unlocked
-            </motion.div>
-
-            {/* AI description */}
-            {aiDescription && (
+              {/* Region + date */}
               <motion.p
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                transition={{ delay: 0.6 }}
+                transition={{ delay: 0.35 }}
                 style={{
-                  fontFamily: 'var(--font-display)', fontStyle: 'italic',
-                  fontSize: 16, color: 'var(--muted)', textAlign: 'center',
-                  lineHeight: 1.5, maxWidth: 320, marginBottom: 8,
+                  fontFamily: 'var(--font-body)', fontSize: 14,
+                  color: 'var(--muted)', margin: 0,
                 }}
               >
-                "{aiDescription}"
+                {continent} · First visited {dateStr}
               </motion.p>
-            )}
 
-            {/* Continent progress */}
-            <motion.div
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.55 }}
-              style={{ width: '100%', maxWidth: 280, marginTop: 4 }}
-            >
-              <div style={{
-                fontFamily: 'var(--font-body)', fontSize: 12,
-                color: 'var(--muted)', textAlign: 'center', marginBottom: 6,
-              }}>
-                You've explored {continentVisited} of {contTotal} countries in {continent}
-              </div>
-              <div style={{
-                width: '100%', height: 6, borderRadius: 3,
-                background: 'var(--sand)',
-                overflow: 'hidden',
-              }}>
-                <motion.div
-                  initial={{ width: 0 }}
-                  animate={{ width: `${pct}%` }}
-                  transition={{ duration: 0.8, delay: 0.7, ease: [0.16, 1, 0.3, 1] }}
+              {/* AI description */}
+              {aiDescription && (
+                <motion.p
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ delay: 0.5 }}
                   style={{
-                    height: '100%', borderRadius: 3,
-                    background: 'linear-gradient(90deg, #D4A843, #F0C866)',
+                    fontFamily: 'var(--font-display)', fontStyle: 'italic',
+                    fontSize: 15, color: 'var(--muted)', textAlign: 'center',
+                    lineHeight: 1.5, maxWidth: 300, margin: '4px 0',
                   }}
-                />
-              </div>
-            </motion.div>
+                >
+                  &ldquo;{aiDescription}&rdquo;
+                </motion.p>
+              )}
 
-            {/* Action buttons */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 0.8 }}
-              style={{ display: 'flex', gap: 10, marginTop: 18, width: '100%', maxWidth: 280 }}
-            >
-              <button
-                onClick={(e) => { e.stopPropagation(); onShare?.() }}
-                style={{
-                  flex: 1, padding: '12px 16px', borderRadius: 14,
-                  border: '1px solid var(--sand)', background: 'white',
-                  fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 600,
-                  color: 'var(--ink)', cursor: 'pointer',
-                }}
+              {/* Continent progress */}
+              <motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.55 }}
+                style={{ width: '100%', maxWidth: 280, marginTop: 6 }}
               >
-                Share this
-              </button>
-              <button
-                onClick={onDismiss}
-                style={{
-                  flex: 1, padding: '12px 16px', borderRadius: 14,
-                  border: 'none', background: 'var(--gold)',
-                  fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 600,
-                  color: 'var(--ink)', cursor: 'pointer',
-                }}
+                <div style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--muted)', marginBottom: 6,
+                }}>
+                  <span>{continent}</span>
+                  <span>{continentVisited}/{contTotal}</span>
+                </div>
+                <div style={{
+                  width: '100%', height: 6, borderRadius: 3,
+                  background: 'var(--sand)', overflow: 'hidden',
+                }}>
+                  <motion.div
+                    initial={{ width: 0 }}
+                    animate={{ width: `${pct}%` }}
+                    transition={{ duration: 0.8, delay: 0.7, ease: [0.16, 1, 0.3, 1] }}
+                    style={{
+                      height: '100%', borderRadius: 3,
+                      background: 'linear-gradient(90deg, var(--terracotta), var(--terracotta-light))',
+                    }}
+                  />
+                </div>
+              </motion.div>
+
+              {/* Action buttons */}
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ delay: 0.8 }}
+                style={{ display: 'flex', gap: 10, marginTop: 14, width: '100%', maxWidth: 280 }}
               >
-                Done
-              </button>
-            </motion.div>
+                <button
+                  onClick={(e) => { e.stopPropagation(); onExploreCities?.() }}
+                  style={{
+                    flex: 1, padding: '12px 16px', borderRadius: 14,
+                    border: 'none', background: 'var(--forest)',
+                    fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 600,
+                    color: 'white', cursor: 'pointer',
+                  }}
+                >
+                  Explore cities →
+                </button>
+                <button
+                  onClick={onDismiss}
+                  style={{
+                    flex: 1, padding: '12px 16px', borderRadius: 14,
+                    border: '1px solid var(--sand)', background: 'white',
+                    fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 600,
+                    color: 'var(--ink)', cursor: 'pointer',
+                  }}
+                >
+                  Done ✓
+                </button>
+              </motion.div>
+            </div>
           </motion.div>
         </motion.div>
       )}

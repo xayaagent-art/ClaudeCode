@@ -1,15 +1,18 @@
 :root {
-  --cream: #FAF7F2;
-  --sand: #E8DCC8;
-  --earth: #8B6914;
-  --gold: #D4A843;
-  --gold-light: #F0C866;
-  --forest: #2D5016;
-  --sky: #C8E6F5;
-  --coral: #E8603A;
+  --cream: #F5F0E8;
+  --parchment: #EDE5D8;
+  --sand: #DDD8CE;
+  --terracotta: #C17F4A;
+  --terracotta-light: #D4956A;
+  --terracotta-dark: #8B5E35;
+  --forest: #2D6A4F;
+  --forest-light: #3D8B68;
+  --sky: #BAD9EC;
+  --sky-light: #E8F4FD;
   --ink: #1A1208;
-  --muted: #8A7A6A;
-  --card-bg: rgba(250, 247, 242, 0.92);
+  --muted: #7A6E64;
+  --coral: #E8603A;
+  --white-card: rgba(245, 240, 232, 0.95);
   --shadow: rgba(26, 18, 8, 0.12);
 
   --font-display: 'Fraunces', Georgia, serif;

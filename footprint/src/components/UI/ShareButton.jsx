@@ -18,10 +18,10 @@ export default function BottomActions({ onAddPlace, onShare }) {
         style={{
           pointerEvents: 'auto',
           fontFamily: 'var(--font-body)', fontSize: 15, fontWeight: 700,
-          color: 'var(--ink)', background: 'var(--gold)',
+          color: 'white', background: 'var(--forest)',
           border: 'none', borderRadius: 40,
           padding: '14px 32px', cursor: 'pointer',
-          boxShadow: '0 4px 20px rgba(212,168,67,0.35)',
+          boxShadow: '0 4px 20px rgba(45,106,79,0.35)',
           letterSpacing: '0.01em',
         }}
       >

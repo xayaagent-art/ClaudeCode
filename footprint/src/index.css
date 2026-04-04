@@ -2,44 +2,26 @@
 @import "./styles/variables.css";
 @import "./styles/animations.css";
 
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
-
-html, body {
-  height: 100dvh;
-  overflow: hidden;
-}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100dvh; overflow: hidden; }
 
 body {
   font-family: var(--font-body);
-  background: var(--cream);
+  background: linear-gradient(180deg, #C8E8F5 0%, #E8F4FD 50%, #F5F0E8 100%);
   color: var(--ink);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
 #root {
-  width: 100vw;
-  height: 100dvh;
-  position: relative;
-  overflow: hidden;
+  width: 100vw; height: 100dvh;
+  position: relative; overflow: hidden;
   touch-action: none;
 }
 
-.mapboxgl-canvas {
-  outline: none;
-}
-
+.mapboxgl-canvas { outline: none; }
 .mapboxgl-ctrl-bottom-left,
 .mapboxgl-ctrl-bottom-right,
 .mapboxgl-ctrl-top-left,
-.mapboxgl-ctrl-top-right {
-  display: none !important;
-}
-
-.mapboxgl-ctrl-group {
-  display: none !important;
-}
+.mapboxgl-ctrl-top-right,
+.mapboxgl-ctrl-group { display: none !important; }

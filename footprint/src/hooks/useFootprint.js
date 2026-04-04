@@ -3,6 +3,7 @@ import { getContinent, getUniqueContinents, getContinentBreakdown, getRank, getN
 
 const STORAGE_KEY = 'footprint_unlocked'
 const CITIES_KEY = 'footprint_cities'
+const NOTES_KEY = 'footprint_notes'
 
 function load(key) {
   try { return JSON.parse(localStorage.getItem(key)) || {} } catch { return {} }
@@ -15,9 +16,11 @@ function save(key, data) {
 export function useFootprint() {
   const [unlocked, setUnlocked] = useState(() => load(STORAGE_KEY))
   const [unlockedCities, setUnlockedCities] = useState(() => load(CITIES_KEY))
+  const [notes, setNotes] = useState(() => load(NOTES_KEY))
 
   useEffect(() => { save(STORAGE_KEY, unlocked) }, [unlocked])
   useEffect(() => { save(CITIES_KEY, unlockedCities) }, [unlockedCities])
+  useEffect(() => { save(NOTES_KEY, notes) }, [notes])
 
   const isUnlocked = useCallback((iso) => !!unlocked[iso], [unlocked])
 
@@ -33,7 +36,6 @@ export function useFootprint() {
     const oldRank = getRank(newCount - 1)
     const rankUp = newRank.name !== oldRank.name
 
-    // Continent stats for this unlock
     const breakdown = getContinentBreakdown(Object.keys(newUnlocked))
     const continentVisited = breakdown[continent] || 0
 
@@ -48,6 +50,10 @@ export function useFootprint() {
     })
   }, [])
 
+  const saveNote = useCallback((iso, text) => {
+    setNotes(prev => ({ ...prev, [iso]: text }))
+  }, [])
+
   const getInfo = useCallback((iso) => unlocked[iso] || null, [unlocked])
 
   const unlockedCodes = Object.keys(unlocked)
@@ -59,10 +65,13 @@ export function useFootprint() {
   const nextRank = getNextRank(countryCount)
   const countriesUntilNextRank = nextRank ? nextRank.min - countryCount : 0
 
+  const totalCityCount = Object.values(unlockedCities).reduce((sum, arr) => sum + arr.length, 0)
+
   return {
     unlocked, isUnlocked, unlock, getInfo,
     unlockedCities, unlockCity,
-    countryCount, continentCount, percentage,
+    notes, saveNote,
+    countryCount, continentCount, percentage, totalCityCount,
     continentBreakdown, rank, nextRank, countriesUntilNextRank,
   }
 }

@@ -9,6 +9,7 @@ import Toast from './components/UI/Toast'
 import Onboarding from './components/UI/Onboarding'
 import MilestoneCard from './components/UI/MilestoneCard'
 import CountryDrawer from './components/UI/CountryDrawer'
+import SettingsSheet from './components/UI/SettingsSheet'
 import { useFootprint } from './hooks/useFootprint'
 import { captureScreenshot } from './lib/share'
 import { getCountryDescription } from './lib/ai'
@@ -19,7 +20,8 @@ export default function App() {
   const {
     unlocked, isUnlocked, unlock, getInfo,
     unlockedCities, unlockCity,
-    countryCount, continentCount, percentage,
+    notes, saveNote,
+    countryCount, continentCount, percentage, totalCityCount,
     continentBreakdown, rank, nextRank, countriesUntilNextRank,
   } = useFootprint()
 
@@ -31,6 +33,7 @@ export default function App() {
   const [showOnboarding, setShowOnboarding] = useState(countryCount === 0)
   const [searchOpen, setSearchOpen] = useState(false)
   const [countryDrawer, setCountryDrawer] = useState(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   useEffect(() => {
     const handler = (e) => {
@@ -40,6 +43,7 @@ export default function App() {
         setShowOnboarding(false)
         setSearchOpen(false)
         setCountryDrawer(null)
+        setSettingsOpen(false)
       }
     }
     window.addEventListener('keydown', handler)
@@ -57,20 +61,16 @@ export default function App() {
     const result = unlock(iso, name)
     if (!result.isNew) return
 
-    // Haptic feedback
     if (navigator.vibrate) navigator.vibrate([100, 50, 100])
 
-    // Particles
     if (screenPos) {
       setParticles({ x: screenPos.x, y: screenPos.y, active: true })
       setTimeout(() => setParticles(null), 2000)
     }
 
-    // Fetch AI description (async, won't block)
     let aiDescription = null
     const descPromise = getCountryDescription(name, iso).then(d => { aiDescription = d })
 
-    // Show celebration after fly
     setTimeout(async () => {
       await descPromise.catch(() => {})
       setCelebration({
@@ -81,12 +81,10 @@ export default function App() {
       })
     }, 500)
 
-    // Auto-dismiss after 6s
     setTimeout(() => {
       setCelebration(prev => prev?.iso === iso ? null : prev)
     }, 6500)
 
-    // Milestone / rank-up
     if (result.rankUp || result.isMilestone) {
       const newCount = Object.keys(unlocked).length + 1
       setTimeout(() => {
@@ -110,6 +108,18 @@ export default function App() {
       })
     }
   }, [getInfo])
+
+  const handleExploreCities = useCallback(() => {
+    if (celebration) {
+      const { iso, name, continent } = celebration
+      setCelebration(null)
+      const info = getInfo(iso)
+      setCountryDrawer({
+        iso, name, continent,
+        date: info?.date,
+      })
+    }
+  }, [celebration, getInfo])
 
   const handleCityUnlock = useCallback((iso, city) => {
     unlockCity(iso, city)
@@ -150,6 +160,23 @@ export default function App() {
         footprint
       </div>
 
+      {/* Settings gear — top right */}
+      <button
+        onClick={() => setSettingsOpen(true)}
+        style={{
+          position: 'fixed', top: 18, right: 20, zIndex: 60,
+          width: 40, height: 40, borderRadius: '50%',
+          border: '1px solid var(--sand)',
+          background: 'rgba(255,255,255,0.7)',
+          backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          cursor: 'pointer', fontSize: 18,
+          boxShadow: '0 2px 8px var(--shadow)',
+        }}
+      >
+        ⚙️
+      </button>
+
       <StatsBar
         countryCount={countryCount}
         continentCount={continentCount}
@@ -177,6 +204,15 @@ export default function App() {
         unlockedCities={unlockedCities}
         onCityUnlock={handleCityUnlock}
         onClose={() => setCountryDrawer(null)}
+        notes={notes}
+        onNoteSave={saveNote}
+      />
+
+      <SettingsSheet
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        countryCount={countryCount}
+        cityCount={totalCityCount}
       />
 
       {particles && <ParticleBurst x={particles.x} y={particles.y} active={particles.active} />}
@@ -185,6 +221,7 @@ export default function App() {
         data={celebration}
         onDismiss={() => setCelebration(null)}
         onShare={handleShare}
+        onExploreCities={handleExploreCities}
       />
 
       <MilestoneCard data={milestone} onDismiss={() => setMilestone(null)} />
