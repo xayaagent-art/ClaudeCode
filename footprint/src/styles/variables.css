@@ -1,20 +1,50 @@
 :root {
-  --cream: #F5F0E8;
-  --parchment: #EDE5D8;
-  --sand: #DDD8CE;
-  --terracotta: #C17F4A;
-  --terracotta-light: #D4956A;
-  --terracotta-dark: #8B5E35;
-  --forest: #2D6A4F;
-  --forest-light: #3D8B68;
-  --sky: #BAD9EC;
-  --sky-light: #E8F4FD;
-  --ink: #1A1208;
-  --muted: #7A6E64;
-  --coral: #E8603A;
-  --white-card: rgba(245, 240, 232, 0.95);
-  --shadow: rgba(26, 18, 8, 0.12);
+  /* Base */
+  --white: #FFFFFF;
+  --bg: #F7F7F7;
+  --surface: #FFFFFF;
+  --border: #EBEBEB;
+  --border-dark: #D8D8D8;
 
+  /* Text */
+  --ink: #222222;
+  --ink-light: #484848;
+  --muted: #717171;
+  --placeholder: #B0B0B0;
+
+  /* Brand */
+  --rausch: #FF5A5F;
+  --teal: #00A699;
+  --arches: #FC642D;
+
+  /* Continent colors */
+  --europe: #E8445A;
+  --asia: #00968A;
+  --americas: #F5A623;
+  --africa: #E8703A;
+  --oceania: #4A90D9;
+  --antarctica: #9B59B6;
+
+  /* Map */
+  --ocean: #C8E8F5;
+  --land-locked: #E8E4DC;
+  --land-border-locked: rgba(0, 0, 0, 0.08);
+
+  /* Shadow */
+  --shadow: rgba(0, 0, 0, 0.12);
+  --shadow-lg: rgba(0, 0, 0, 0.2);
+
+  /* Fonts */
   --font-display: 'Fraunces', Georgia, serif;
-  --font-body: 'Nunito', system-ui, sans-serif;
+  --font-body: 'Plus Jakarta Sans', system-ui, sans-serif;
+
+  /* Type scale */
+  --text-xs: 11px;
+  --text-sm: 13px;
+  --text-base: 15px;
+  --text-md: 17px;
+  --text-lg: 20px;
+  --text-xl: 24px;
+  --text-display: 36px;
+  --text-hero: 48px;
 }

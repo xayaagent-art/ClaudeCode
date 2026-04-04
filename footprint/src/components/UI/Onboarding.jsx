@@ -24,15 +24,13 @@ export default function Onboarding({ visible, onDismiss }) {
             style={{
               display: 'flex', flexDirection: 'column', alignItems: 'center',
               gap: 10, padding: '36px 44px',
-              background: 'var(--card-bg)',
-              backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)',
-              border: '1px solid var(--sand)',
-              borderRadius: 28,
+              background: 'white',
+              border: '1px solid #EBEBEB',
+              borderRadius: 24,
               textAlign: 'center', maxWidth: 340,
-              boxShadow: '0 8px 40px var(--shadow)',
+              boxShadow: '0 8px 40px rgba(0,0,0,0.12)',
             }}
           >
-            {/* Spinning globe */}
             <motion.div
               animate={{ rotate: 360 }}
               transition={{ duration: 10, repeat: Infinity, ease: 'linear' }}
@@ -43,29 +41,27 @@ export default function Onboarding({ visible, onDismiss }) {
 
             <h2 style={{
               fontFamily: 'var(--font-display)', fontSize: 32, fontWeight: 600,
-              color: 'var(--ink)', lineHeight: 1.2, margin: 0,
+              color: '#222', lineHeight: 1.2, margin: 0,
             }}>
               Where have you been?
             </h2>
 
             <p style={{
               fontFamily: 'var(--font-body)', fontSize: 16,
-              color: 'var(--muted)', lineHeight: 1.5,
+              color: '#717171', lineHeight: 1.5,
             }}>
-              Tap any country you've visited to unlock it
+              Tap any country to unlock it
             </p>
 
-            {/* Pulsing gold dots */}
             <div style={{ display: 'flex', gap: 12, marginTop: 6 }}>
               {[0, 1, 2].map(i => (
                 <motion.div
                   key={i}
-                  animate={{ scale: [1, 1.5, 1], opacity: [0.4, 1, 0.4] }}
+                  animate={{ scale: [1, 1.4, 1], opacity: [0.4, 1, 0.4] }}
                   transition={{ duration: 2, delay: i * 0.3, repeat: Infinity, ease: 'easeInOut' }}
                   style={{
                     width: 10, height: 10, borderRadius: '50%',
-                    background: 'var(--gold)',
-                    boxShadow: '0 0 8px rgba(212,168,67,0.4)',
+                    background: 'var(--rausch)',
                   }}
                 />
               ))}

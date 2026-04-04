@@ -5,24 +5,25 @@ export default function BottomActions({ onAddPlace, onShare }) {
     <div style={{
       position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 60,
       display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10,
-      paddingBottom: 'max(env(safe-area-inset-bottom, 16px), 16px)',
+      paddingBottom: 'max(24px, env(safe-area-inset-bottom))',
+      paddingLeft: 20, paddingRight: 20,
       pointerEvents: 'none',
     }}>
       <motion.button
         initial={{ y: 20, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         transition={{ type: 'spring', stiffness: 280, damping: 26, delay: 0.2 }}
-        whileHover={{ scale: 1.04 }}
-        whileTap={{ scale: 0.96 }}
+        whileHover={{ scale: 1.02 }}
+        whileTap={{ scale: 0.97 }}
         onClick={onAddPlace}
         style={{
           pointerEvents: 'auto',
-          fontFamily: 'var(--font-body)', fontSize: 15, fontWeight: 700,
-          color: 'white', background: 'var(--forest)',
-          border: 'none', borderRadius: 40,
-          padding: '14px 32px', cursor: 'pointer',
-          boxShadow: '0 4px 20px rgba(45,106,79,0.35)',
-          letterSpacing: '0.01em',
+          width: 'min(360px, 100%)',
+          height: 56, borderRadius: 16,
+          fontFamily: 'var(--font-body)', fontSize: 17, fontWeight: 600,
+          color: 'white', background: 'var(--rausch)',
+          border: 'none', cursor: 'pointer',
+          boxShadow: '0 4px 24px rgba(255,90,95,0.35)',
         }}
       >
         ＋ Add a place
@@ -32,16 +33,16 @@ export default function BottomActions({ onAddPlace, onShare }) {
         initial={{ y: 16, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         transition={{ type: 'spring', stiffness: 280, damping: 26, delay: 0.35 }}
-        whileHover={{ scale: 1.04 }}
-        whileTap={{ scale: 0.96 }}
+        whileHover={{ scale: 1.02 }}
+        whileTap={{ scale: 0.97 }}
         onClick={onShare}
         style={{
           pointerEvents: 'auto',
-          fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 600,
-          color: 'white', background: 'var(--coral)',
-          border: 'none', borderRadius: 40,
-          padding: '10px 24px', cursor: 'pointer',
-          boxShadow: '0 4px 16px rgba(232,96,58,0.25)',
+          width: 'min(360px, 100%)',
+          height: 48, borderRadius: 16,
+          fontFamily: 'var(--font-body)', fontSize: 15, fontWeight: 500,
+          color: '#222', background: 'white',
+          border: '1.5px solid #EBEBEB', cursor: 'pointer',
         }}
       >
         Share my Footprint →

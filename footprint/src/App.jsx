@@ -1,9 +1,10 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
+import confetti from 'canvas-confetti'
 import MapCanvas from './components/Map/MapCanvas'
 import CelebrationOverlay from './components/Map/UnlockAnimation'
 import ParticleBurst from './components/Particles/ParticleBurst'
 import StatsBar from './components/UI/StatsBar'
-import SearchModal from './components/UI/SearchPanel'
+import SearchPanel from './components/UI/SearchPanel'
 import BottomActions from './components/UI/ShareButton'
 import Toast from './components/UI/Toast'
 import Onboarding from './components/UI/Onboarding'
@@ -14,7 +15,6 @@ import { useFootprint } from './hooks/useFootprint'
 import { captureScreenshot } from './lib/share'
 import { getCountryDescription } from './lib/ai'
 import { COUNTRY_LIST } from './data/countryList'
-import { getContinent } from './data/countryMeta'
 
 export default function App() {
   const {
@@ -52,7 +52,7 @@ export default function App() {
 
   const showToast = useCallback((msg) => {
     setToast({ visible: true, message: msg })
-    setTimeout(() => setToast({ visible: false, message: '' }), 3000)
+    setTimeout(() => setToast({ visible: false, message: '' }), 2500)
   }, [])
 
   const handleUnlock = useCallback(async (iso, name, screenPos) => {
@@ -61,16 +61,26 @@ export default function App() {
     const result = unlock(iso, name)
     if (!result.isNew) return
 
-    if (navigator.vibrate) navigator.vibrate([100, 50, 100])
+    // Haptic + confetti
+    if (navigator.vibrate) navigator.vibrate([80, 40, 80])
+    confetti({
+      particleCount: 30,
+      spread: 60,
+      origin: { y: 0.6 },
+      colors: ['#FF5A5F', '#00A699', '#FC642D', '#F5A623', '#4A90D9'],
+    })
 
+    // Particles at click position
     if (screenPos) {
       setParticles({ x: screenPos.x, y: screenPos.y, active: true })
       setTimeout(() => setParticles(null), 2000)
     }
 
+    // Fetch AI description
     let aiDescription = null
     const descPromise = getCountryDescription(name, iso).then(d => { aiDescription = d })
 
+    // Show celebration
     setTimeout(async () => {
       await descPromise.catch(() => {})
       setCelebration({
@@ -85,6 +95,7 @@ export default function App() {
       setCelebration(prev => prev?.iso === iso ? null : prev)
     }, 6500)
 
+    // Milestone / rank-up
     if (result.rankUp || result.isMilestone) {
       const newCount = Object.keys(unlocked).length + 1
       setTimeout(() => {
@@ -114,10 +125,7 @@ export default function App() {
       const { iso, name, continent } = celebration
       setCelebration(null)
       const info = getInfo(iso)
-      setCountryDrawer({
-        iso, name, continent,
-        date: info?.date,
-      })
+      setCountryDrawer({ iso, name, continent, date: info?.date })
     }
   }, [celebration, getInfo])
 
@@ -128,6 +136,7 @@ export default function App() {
   }, [unlockCity, showToast])
 
   const handleSearch = useCallback((country) => {
+    setSearchOpen(false)
     if (!isUnlocked(country.iso)) {
       handleUnlock(country.iso, country.name, null)
     } else {
@@ -149,34 +158,6 @@ export default function App() {
         mapRef={mapRef}
       />
 
-      {/* Wordmark — top left */}
-      <div style={{
-        position: 'fixed', top: 18, left: 20, zIndex: 60,
-        fontFamily: 'var(--font-display)', fontStyle: 'italic',
-        fontSize: 24, fontWeight: 600,
-        color: 'var(--ink)', letterSpacing: '-0.02em',
-        userSelect: 'none',
-      }}>
-        footprint
-      </div>
-
-      {/* Settings gear — top right */}
-      <button
-        onClick={() => setSettingsOpen(true)}
-        style={{
-          position: 'fixed', top: 18, right: 20, zIndex: 60,
-          width: 40, height: 40, borderRadius: '50%',
-          border: '1px solid var(--sand)',
-          background: 'rgba(255,255,255,0.7)',
-          backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          cursor: 'pointer', fontSize: 18,
-          boxShadow: '0 2px 8px var(--shadow)',
-        }}
-      >
-        ⚙️
-      </button>
-
       <StatsBar
         countryCount={countryCount}
         continentCount={continentCount}
@@ -184,6 +165,7 @@ export default function App() {
         nextRank={nextRank}
         countriesUntilNextRank={countriesUntilNextRank}
         continentBreakdown={continentBreakdown}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
 
       <BottomActions
@@ -191,7 +173,7 @@ export default function App() {
         onShare={handleShare}
       />
 
-      <SearchModal
+      <SearchPanel
         countries={COUNTRY_LIST}
         isUnlocked={isUnlocked}
         onSelect={handleSearch}

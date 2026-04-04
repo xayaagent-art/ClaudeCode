@@ -1,29 +1,22 @@
 # Footprint — Travel Map App
 
-## Roadmap
-
-- **Phase 1** (current): Core map, unlock animation, localStorage, share screenshot
-- **Phase 2**: Supabase auth, persistent map, user profiles
-- **Phase 3**: Friends map, social comparison ("you've both been to X")
-- **Phase 4**: Atlas Wrapped annual card, unlock history timeline
-- **Phase 5**: Pro tier (map skins, photo pins, region granularity) + Stripe
-
 ## Tech Stack
 
 - React + Vite
-- Mapbox GL JS (dark-v11 base style)
-- Framer Motion (spring physics only)
+- Mapbox GL JS (light-v11 base, globe projection)
+- Framer Motion (spring physics)
 - Tailwind CSS
-- html2canvas for share screenshots
-- Supabase (Phase 2)
+- canvas-confetti for unlock celebrations
+- html2canvas for share screenshots (lazy-loaded)
+- localStorage for persistence
 
-## Design Language — "Spatial Dark Cartography"
+## Design Language — "Airbnb meets National Geographic"
 
-- Spring physics only (stiffness: 280, damping: 26)
-- Frosted glass panels (backdrop-blur, rgba backgrounds)
-- Vignette + grain texture overlays
-- Gold unlock palette (#C9A84C / #E8C97A)
-- Fonts: Cormorant Garamond (display) + DM Sans (body)
+- Clean white surfaces with intentional color
+- Plus Jakarta Sans (UI) + Fraunces (display)
+- Brand: Rausch #FF5A5F, Teal #00A699, Arches #FC642D
+- Continent colors: Europe #E8445A, Asia #00968A, Americas #F5A623, Africa #E8703A, Oceania #4A90D9
+- Each unlocked country fills with its continent color on the globe
 
 ## Development
 

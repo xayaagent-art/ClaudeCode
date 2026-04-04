@@ -64,7 +64,6 @@ export function useFootprint() {
   const rank = getRank(countryCount)
   const nextRank = getNextRank(countryCount)
   const countriesUntilNextRank = nextRank ? nextRank.min - countryCount : 0
-
   const totalCityCount = Object.values(unlockedCities).reduce((sum, arr) => sum + arr.length, 0)
 
   return {

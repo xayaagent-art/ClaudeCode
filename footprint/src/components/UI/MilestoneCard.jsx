@@ -1,6 +1,6 @@
 import { motion, AnimatePresence } from 'framer-motion'
 
-const confettiColors = ['#D4A843', '#E8603A', '#2D5016', '#C8E6F5', '#F0C866', '#E8DCC8']
+const confettiColors = ['#FF5A5F', '#00A699', '#FC642D', '#F5A623', '#4A90D9', '#E8445A']
 
 export default function MilestoneCard({ data, onDismiss }) {
   if (!data) return null
@@ -16,12 +16,11 @@ export default function MilestoneCard({ data, onDismiss }) {
           style={{
             position: 'fixed', inset: 0, zIndex: 250,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: 'rgba(26,18,8,0.35)',
+            background: 'rgba(0,0,0,0.35)',
             backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
             cursor: 'pointer',
           }}
         >
-          {/* Confetti */}
           {Array.from({ length: 36 }).map((_, i) => {
             const size = 6 + Math.random() * 8
             return (
@@ -53,9 +52,9 @@ export default function MilestoneCard({ data, onDismiss }) {
             style={{
               display: 'flex', flexDirection: 'column', alignItems: 'center',
               gap: 8, padding: '44px 52px',
-              background: 'var(--cream)',
-              borderRadius: 28, textAlign: 'center',
-              boxShadow: '0 12px 48px var(--shadow)',
+              background: 'white', borderRadius: 24,
+              textAlign: 'center',
+              boxShadow: '0 24px 80px rgba(0,0,0,0.2)',
             }}
           >
             <motion.div
@@ -68,27 +67,24 @@ export default function MilestoneCard({ data, onDismiss }) {
 
             <h2 style={{
               fontFamily: 'var(--font-display)', fontSize: 42, fontWeight: 700,
-              color: 'var(--ink)', margin: '4px 0 0',
+              color: '#222', margin: '4px 0 0',
             }}>
               {data.rankUp ? data.rank.name : 'Milestone!'}
             </h2>
 
             <p style={{
-              fontFamily: 'var(--font-body)', fontSize: 16, color: 'var(--muted)',
+              fontFamily: 'var(--font-body)', fontSize: 16, color: '#717171',
             }}>
-              {data.rankUp
-                ? `New rank unlocked!`
-                : `${data.count} countries and counting`
-              }
+              {data.rankUp ? 'New rank unlocked!' : `${data.count} countries and counting`}
             </p>
 
             <button
               onClick={onDismiss}
               style={{
                 marginTop: 16, fontFamily: 'var(--font-body)',
-                fontSize: 14, fontWeight: 600, color: 'var(--ink)',
-                background: 'var(--gold)', border: 'none',
-                borderRadius: 14, padding: '10px 28px', cursor: 'pointer',
+                fontSize: 15, fontWeight: 600, color: 'white',
+                background: 'var(--rausch)', border: 'none',
+                borderRadius: 14, padding: '12px 28px', cursor: 'pointer',
               }}
             >
               Keep exploring

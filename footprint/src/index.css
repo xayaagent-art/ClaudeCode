@@ -7,7 +7,7 @@ html, body { height: 100dvh; overflow: hidden; }
 
 body {
   font-family: var(--font-body);
-  background: linear-gradient(180deg, #C8E8F5 0%, #E8F4FD 50%, #F5F0E8 100%);
+  background: var(--bg);
   color: var(--ink);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;

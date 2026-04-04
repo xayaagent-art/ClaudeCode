@@ -1,6 +1,8 @@
 import { useRef, useState, useEffect } from 'react'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
+import { getContinent } from '../../data/countryMeta'
+import { CONTINENT_COLORS } from '../../data/continentColors'
 
 const SRC = 'country-boundaries'
 const FILL = 'country-fill'
@@ -34,32 +36,37 @@ export default function MapCanvas({ unlocked, isUnlocked, onUnlock, onCountryTap
 
     map.on('load', () => {
       map.setFog({
-        color: '#C8E8F5', 'high-color': '#87CEEB',
-        'horizon-blend': 0.06, 'space-color': '#4A90D9', 'star-intensity': 0.0,
+        color: '#E8F4FD', 'high-color': '#B8D9F0',
+        'horizon-blend': 0.05, 'space-color': '#6BA3D6', 'star-intensity': 0.0,
       })
       map.getStyle().layers.forEach(l => {
-        if (l.type === 'background') map.setPaintProperty(l.id, 'background-color', '#EDE5D8')
-        if (l.id === 'water') map.setPaintProperty(l.id, 'fill-color', '#BAD9EC')
+        if (l.type === 'background') map.setPaintProperty(l.id, 'background-color', '#F0EDE6')
+        if (l.id === 'water') map.setPaintProperty(l.id, 'fill-color', '#C8E8F5')
         if (l.id.includes('country-label')) map.setLayoutProperty(l.id, 'visibility', 'none')
         if (l.id.includes('admin-0') && l.type === 'line') {
-          map.setPaintProperty(l.id, 'line-color', '#C8C0B0')
-          map.setPaintProperty(l.id, 'line-opacity', 0.5)
+          map.setPaintProperty(l.id, 'line-color', 'rgba(0,0,0,0.08)')
+          map.setPaintProperty(l.id, 'line-opacity', 0.6)
         }
       })
       map.addSource(SRC, { type: 'vector', url: 'mapbox://mapbox.country-boundaries-v1' })
+      // Locked countries base fill
       map.addLayer({ id: FILL, type: 'fill', source: SRC, 'source-layer': 'country_boundaries',
-        paint: { 'fill-color': '#DDD8CE', 'fill-opacity': 0.5 } })
+        paint: { 'fill-color': '#E8E4DC', 'fill-opacity': 0.6 } })
+      // Unlocked countries — continent color applied via match expression
       map.addLayer({ id: FILL_U, type: 'fill', source: SRC, 'source-layer': 'country_boundaries',
         filter: ['in', 'iso_3166_1', ''],
-        paint: { 'fill-color': '#C17F4A', 'fill-opacity': ['interpolate', ['linear'], ['zoom'], 1, 0.65, 5, 0.8] } })
+        paint: { 'fill-color': '#E8E4DC', 'fill-opacity': 1.0 } })
+      // Locked borders
       map.addLayer({ id: BORDER, type: 'line', source: SRC, 'source-layer': 'country_boundaries',
-        paint: { 'line-color': '#C8C0B0', 'line-opacity': 0.5, 'line-width': 0.5 } })
+        paint: { 'line-color': 'rgba(0,0,0,0.08)', 'line-opacity': 0.6, 'line-width': 0.5 } })
+      // Unlocked borders
       map.addLayer({ id: BORDER_U, type: 'line', source: SRC, 'source-layer': 'country_boundaries',
         filter: ['in', 'iso_3166_1', ''],
-        paint: { 'line-color': '#8B5E35', 'line-opacity': 0.9, 'line-width': 1.5 } })
+        paint: { 'line-color': 'rgba(0,0,0,0.15)', 'line-opacity': 0.9, 'line-width': 1.5 } })
+      // Hover highlight
       map.addLayer({ id: HIGHLIGHT, type: 'line', source: SRC, 'source-layer': 'country_boundaries',
         filter: ['==', 'iso_3166_1', ''],
-        paint: { 'line-color': '#8B5E35', 'line-opacity': 0.5, 'line-width': 2 } })
+        paint: { 'line-color': '#222222', 'line-opacity': 0.4, 'line-width': 2 } })
       setReady(true); setLoading(false)
       mapRef.current = map
       if (extRef) extRef.current = map
@@ -67,10 +74,25 @@ export default function MapCanvas({ unlocked, isUnlocked, onUnlock, onCountryTap
     return () => { map.remove(); mapRef.current = null; if (extRef) extRef.current = null }
   }, [])
 
+  // Update filters and continent-based fill colors when unlocked changes
   useEffect(() => {
     const m = mapRef.current; if (!m || !ready) return
     const f = codes.length > 0 ? ['in', 'iso_3166_1', ...codes] : ['in', 'iso_3166_1', '']
-    m.setFilter(FILL_U, f); m.setFilter(BORDER_U, f)
+    m.setFilter(FILL_U, f)
+    m.setFilter(BORDER_U, f)
+
+    // Build match expression for continent colors
+    if (codes.length > 0) {
+      const colorEntries = codes.flatMap(iso => {
+        const continent = getContinent(iso)
+        return [iso, CONTINENT_COLORS[continent] || '#717171']
+      })
+      m.setPaintProperty(FILL_U, 'fill-color', [
+        'match', ['get', 'iso_3166_1'],
+        ...colorEntries,
+        '#E8E4DC'
+      ])
+    }
   }, [codes, ready])
 
   useEffect(() => {
@@ -109,14 +131,26 @@ export default function MapCanvas({ unlocked, isUnlocked, onUnlock, onCountryTap
   return (
     <div style={{ position: 'relative', width: '100%', height: '100dvh', touchAction: 'none' }}>
       {loading && (
-        <div style={{ position: 'absolute', inset: 0, zIndex: 100, background: 'linear-gradient(180deg, #C8E8F5 0%, #E8F4FD 50%, #F5F0E8 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16 }}>
-          <div style={{ width: 48, height: 48, borderRadius: '50%', border: '3px solid #DDD8CE', borderTopColor: '#C17F4A', animation: 'spin 1s linear infinite' }} />
-          <span style={{ fontFamily: 'var(--font-display)', fontSize: 18, color: 'var(--muted)', letterSpacing: '-0.02em' }}>loading your globe...</span>
+        <div style={{
+          position: 'absolute', inset: 0, zIndex: 100,
+          background: '#F7F7F7',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16,
+        }}>
+          <div style={{ width: 48, height: 48, borderRadius: '50%', border: '3px solid var(--border)', borderTopColor: 'var(--rausch)', animation: 'spin 1s linear infinite' }} />
+          <span style={{ fontFamily: 'var(--font-body)', fontSize: 15, fontWeight: 500, color: 'var(--muted)' }}>Loading your globe...</span>
         </div>
       )}
       <div ref={containerRef} style={{ width: '100%', height: '100%', touchAction: 'none' }} />
       {tooltip && (
-        <div style={{ position: 'absolute', left: tooltip.x, top: tooltip.y - 44, transform: 'translateX(-50%)', fontFamily: 'var(--font-display)', fontSize: 15, fontWeight: 600, color: 'var(--ink)', background: 'var(--white-card)', backdropFilter: 'blur(12px)', border: '1px solid var(--sand)', borderRadius: 12, padding: '6px 14px', pointerEvents: 'none', whiteSpace: 'nowrap', zIndex: 30, boxShadow: '0 4px 16px var(--shadow)' }}>
+        <div style={{
+          position: 'absolute', left: tooltip.x, top: tooltip.y - 44, transform: 'translateX(-50%)',
+          fontFamily: 'var(--font-body)', fontSize: 14, fontWeight: 500,
+          color: 'var(--ink)', background: 'white',
+          border: '1px solid var(--border)',
+          borderRadius: 12, padding: '6px 14px',
+          pointerEvents: 'none', whiteSpace: 'nowrap', zIndex: 30,
+          boxShadow: '0 4px 16px var(--shadow)',
+        }}>
           {tooltip.name}
         </div>
       )}
