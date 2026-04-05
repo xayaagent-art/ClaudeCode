@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
 import { isoToFlag, getContinent } from '../../data/countryMeta'
-import { getContinentColor } from '../../data/continentColors'
 import { getCities } from '../../data/cities'
+import ContinentBadge from './ContinentBadge'
+import BottomSheet from './BottomSheet'
 
 export default function SearchPanel({ countries, isUnlocked, onSelect, open, onClose }) {
   const [query, setQuery] = useState('')
@@ -11,7 +11,7 @@ export default function SearchPanel({ countries, isUnlocked, onSelect, open, onC
   useEffect(() => {
     if (open) {
       setQuery('')
-      setTimeout(() => inputRef.current?.focus(), 100)
+      setTimeout(() => inputRef.current?.focus(), 150)
     }
   }, [open])
 
@@ -19,7 +19,6 @@ export default function SearchPanel({ countries, isUnlocked, onSelect, open, onC
   const filtered = q.length > 0
     ? (() => {
         const countryMatches = countries.filter(c => c.name.toLowerCase().includes(q))
-        // Also search cities — find countries whose cities match
         const cityMatches = countries.filter(c => {
           if (countryMatches.some(m => m.iso === c.iso)) return false
           return getCities(c.iso).some(city => city.toLowerCase().includes(q))
@@ -35,132 +34,104 @@ export default function SearchPanel({ countries, isUnlocked, onSelect, open, onC
   }, [onSelect, onClose])
 
   return (
-    <AnimatePresence>
-      {open && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          onClick={onClose}
-          style={{
-            position: 'fixed', inset: 0, zIndex: 100,
-            background: 'rgba(0,0,0,0.25)',
-            display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
-            paddingBottom: 'env(safe-area-inset-bottom, 0px)',
-          }}
-        >
-          <motion.div
-            initial={{ y: '100%' }}
-            animate={{ y: 0 }}
-            exit={{ y: '100%' }}
-            transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-            onClick={e => e.stopPropagation()}
+    <BottomSheet open={open} onClose={onClose}>
+      {/* Title */}
+      <div style={{ padding: '4px 20px 12px', textAlign: 'center' }}>
+        <h2 style={{
+          fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 600,
+          color: 'var(--color-ink)', margin: 0,
+        }}>
+          Add a place
+        </h2>
+      </div>
+
+      {/* Search input */}
+      <div style={{ padding: '0 20px 12px' }}>
+        <div style={{
+          position: 'relative', display: 'flex', alignItems: 'center',
+          background: 'var(--color-surface-2)', borderRadius: 'var(--radius-lg)',
+          height: 48, padding: '0 16px',
+          border: '1.5px solid transparent',
+          transition: 'all var(--duration-fast)',
+        }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--color-ink-3)" strokeWidth="2" strokeLinecap="round">
+            <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          <input
+            ref={inputRef}
+            type="text"
+            placeholder="Country or city..."
+            value={query}
+            onChange={e => setQuery(e.target.value)}
             style={{
-              width: '100%', maxWidth: 480,
-              background: 'white',
-              borderRadius: '24px 24px 0 0',
-              maxHeight: '80dvh',
-              display: 'flex', flexDirection: 'column',
-              boxShadow: '0 -8px 40px rgba(0,0,0,0.15)',
+              background: 'transparent', border: 'none', outline: 'none',
+              padding: '0 12px', fontSize: 16, color: 'var(--color-ink)',
+              width: '100%', height: '100%',
+              fontFamily: 'var(--font-body)',
             }}
-          >
-            {/* Handle bar */}
-            <div style={{ padding: '12px 0 4px', display: 'flex', justifyContent: 'center' }}>
-              <div style={{ width: 40, height: 4, borderRadius: 2, background: '#E0E0E0' }} />
-            </div>
+          />
+          {query && (
+            <button
+              onClick={() => { setQuery(''); inputRef.current?.focus() }}
+              style={{
+                background: 'var(--color-border-2)', border: 'none', borderRadius: '50%',
+                width: 24, height: 24, display: 'flex', alignItems: 'center',
+                justifyContent: 'center', cursor: 'pointer', flexShrink: 0,
+                fontSize: 14, color: 'var(--color-ink-3)', lineHeight: 1,
+              }}
+            >
+              &times;
+            </button>
+          )}
+        </div>
+      </div>
 
-            {/* Search input */}
-            <div style={{ padding: '8px 20px 12px' }}>
-              <div style={{
-                position: 'relative', display: 'flex', alignItems: 'center',
-                background: '#F7F7F7', borderRadius: 12,
-                height: 48, padding: '0 16px',
-              }}>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#B0B0B0" strokeWidth="2" strokeLinecap="round">
-                  <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-                </svg>
-                <input
-                  ref={inputRef}
-                  type="text"
-                  placeholder="Search countries or cities..."
-                  value={query}
-                  onChange={e => setQuery(e.target.value)}
-                  style={{
-                    background: 'transparent', border: 'none', outline: 'none',
-                    padding: '0 12px', fontSize: 16, color: '#222',
-                    width: '100%', height: '100%',
-                    fontFamily: 'var(--font-body)',
-                  }}
-                />
-                {query && (
-                  <button
-                    onClick={() => { setQuery(''); inputRef.current?.focus() }}
-                    style={{
-                      background: '#D8D8D8', border: 'none', borderRadius: '50%',
-                      width: 24, height: 24, display: 'flex', alignItems: 'center',
-                      justifyContent: 'center', cursor: 'pointer', flexShrink: 0,
-                      fontSize: 14, color: '#717171', lineHeight: 1,
-                    }}
-                  >
-                    &times;
-                  </button>
+      {/* Country list */}
+      <div style={{
+        flex: 1, overflow: 'auto',
+        WebkitOverflowScrolling: 'touch',
+        paddingBottom: 'max(24px, env(safe-area-inset-bottom))',
+      }}>
+        {filtered.map(c => {
+          const unlocked = isUnlocked(c.iso)
+          const continent = getContinent(c.iso)
+          const matchingCity = q.length > 0 && !c.name.toLowerCase().includes(q)
+            ? getCities(c.iso).find(city => city.toLowerCase().includes(q))
+            : null
+          return (
+            <button
+              key={c.iso}
+              onClick={() => handleSelect(c)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 12,
+                width: '100%', minHeight: 52, padding: '8px 20px',
+                border: 'none', background: 'transparent',
+                fontFamily: 'var(--font-body)', fontSize: 15, fontWeight: 500,
+                color: 'var(--color-ink)', cursor: 'pointer',
+                borderBottom: '1px solid var(--color-surface-2)', textAlign: 'left',
+                transition: 'background var(--duration-fast)',
+              }}
+            >
+              <span style={{ fontSize: 28, width: 36, textAlign: 'center' }}>{isoToFlag(c.iso)}</span>
+              <span style={{ flex: 1 }}>
+                {c.name}
+                {matchingCity && (
+                  <span style={{ display: 'block', fontSize: 12, color: 'var(--color-ink-3)', fontWeight: 400 }}>
+                    📍 {matchingCity}
+                  </span>
                 )}
-              </div>
-            </div>
-
-            {/* Country list */}
-            <div style={{
-              flex: 1, overflow: 'auto',
-              WebkitOverflowScrolling: 'touch',
-              paddingBottom: 'max(24px, env(safe-area-inset-bottom))',
-            }}>
-              {filtered.map(c => {
-                const unlocked = isUnlocked(c.iso)
-                const continent = getContinent(c.iso)
-                const contColor = getContinentColor(continent)
-                const matchingCity = q.length > 0 && !c.name.toLowerCase().includes(q)
-                  ? getCities(c.iso).find(city => city.toLowerCase().includes(q))
-                  : null
-                return (
-                  <button
-                    key={c.iso}
-                    onClick={() => handleSelect(c)}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 12,
-                      width: '100%', minHeight: 52, padding: '8px 20px',
-                      border: 'none', background: 'transparent',
-                      fontFamily: 'var(--font-body)', fontSize: 15, fontWeight: 500,
-                      color: '#222', cursor: 'pointer',
-                      borderBottom: '1px solid #F7F7F7', textAlign: 'left',
-                    }}
-                  >
-                    <span style={{ fontSize: 22, width: 32, textAlign: 'center' }}>{isoToFlag(c.iso)}</span>
-                    <span style={{ flex: 1 }}>
-                      {c.name}
-                      {matchingCity && (
-                        <span style={{ display: 'block', fontSize: 12, color: '#717171', fontWeight: 400 }}>
-                          📍 {matchingCity}
-                        </span>
-                      )}
-                    </span>
-                    <span style={{
-                      fontSize: 11, fontWeight: 600, color: contColor,
-                      background: `${contColor}15`, borderRadius: 6,
-                      padding: '2px 8px', textTransform: 'uppercase',
-                      letterSpacing: '0.04em',
-                    }}>
-                      {continent === 'North America' ? 'N. America' : continent === 'South America' ? 'S. America' : continent}
-                    </span>
-                    <span style={{ fontSize: 16, color: unlocked ? '#00A699' : '#D8D8D8', width: 24, textAlign: 'center' }}>
-                      {unlocked ? '✓' : '🔒'}
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+              </span>
+              <ContinentBadge continent={continent} size="sm" />
+              <span style={{
+                fontSize: 16, width: 24, textAlign: 'center',
+                color: unlocked ? 'var(--color-brand-2)' : 'var(--color-border-2)',
+              }}>
+                {unlocked ? '✓' : '🔒'}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+    </BottomSheet>
   )
 }

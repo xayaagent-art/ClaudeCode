@@ -71,7 +71,7 @@ export default function App() {
       particleCount: 30,
       spread: 60,
       origin: { y: 0.6 },
-      colors: ['#C44B6E', '#2E8B7A', '#C8883A', '#B87333', '#4A7FB5'],
+      colors: ['#C44B6E', '#2E8B7A', '#C8883A', '#B87333', '#4A7FB5', '#D45A5A'],
     })
 
     // Particles at click position

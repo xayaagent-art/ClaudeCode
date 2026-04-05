@@ -7,8 +7,8 @@ html, body { height: 100dvh; overflow: hidden; }
 
 body {
   font-family: var(--font-body);
-  background: var(--bg);
-  color: var(--ink);
+  background: var(--color-bg);
+  color: var(--color-ink);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }

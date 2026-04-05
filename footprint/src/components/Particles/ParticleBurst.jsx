@@ -1,7 +1,7 @@
 import { motion, AnimatePresence } from 'framer-motion'
 import { useMemo } from 'react'
 
-const colors = ['#FF5A5F', '#00A699', '#FC642D', '#F5A623', '#4A90D9']
+const colors = ['oklch(52% 0.18 0)', 'oklch(52% 0.12 180)', 'oklch(62% 0.15 50)', 'oklch(58% 0.16 40)', 'oklch(52% 0.12 240)']
 
 export default function ParticleBurst({ x, y, active }) {
   const particles = useMemo(() => {

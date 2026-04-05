@@ -24,11 +24,11 @@ export default function Onboarding({ visible, onDismiss }) {
             style={{
               display: 'flex', flexDirection: 'column', alignItems: 'center',
               gap: 10, padding: '36px 44px',
-              background: 'white',
-              border: '1px solid #EBEBEB',
-              borderRadius: 24,
+              background: 'var(--color-surface)',
+              border: '1px solid var(--color-border)',
+              borderRadius: 'var(--radius-xl)',
               textAlign: 'center', maxWidth: 340,
-              boxShadow: '0 8px 40px rgba(0,0,0,0.12)',
+              boxShadow: 'var(--shadow-lg)',
             }}
           >
             <motion.div
@@ -41,14 +41,14 @@ export default function Onboarding({ visible, onDismiss }) {
 
             <h2 style={{
               fontFamily: 'var(--font-display)', fontSize: 32, fontWeight: 600,
-              color: '#222', lineHeight: 1.2, margin: 0,
+              color: 'var(--color-ink)', lineHeight: 1.2, margin: 0,
             }}>
               Where have you been?
             </h2>
 
             <p style={{
               fontFamily: 'var(--font-body)', fontSize: 16,
-              color: '#717171', lineHeight: 1.5,
+              color: 'var(--color-ink-3)', lineHeight: 1.5,
             }}>
               Tap any country to unlock it
             </p>
@@ -61,7 +61,7 @@ export default function Onboarding({ visible, onDismiss }) {
                   transition={{ duration: 2, delay: i * 0.3, repeat: Infinity, ease: 'easeInOut' }}
                   style={{
                     width: 10, height: 10, borderRadius: '50%',
-                    background: 'var(--rausch)',
+                    background: 'var(--color-brand)',
                   }}
                 />
               ))}
