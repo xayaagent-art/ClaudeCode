@@ -20,9 +20,20 @@ ET = pytz.timezone("America/New_York")
 
 PRIMARY_MODEL = "moonshotai/kimi-k2"
 FALLBACK_MODEL = "meta-llama/llama-3.3-70b-instruct"
-MAX_TOKENS = 120
+MAX_TOKENS = 150
 TEMPERATURE = 0.3
 TIMEOUT = 8
+
+SNIPER_SYSTEM = (
+    "You are SniperBot, an elite options wheel trader AI. "
+    "You write ultra-concise signal theses for a $100K wheel "
+    "strategy portfolio targeting $3,500/month premium income. "
+    "Your trader is assigned on: HIMS $45, EOSE $13.07, SOFI $17.14, "
+    "APLD $35, TE $8, CIFR $25, ONDS $12, HOOD $110, RKLB $80, "
+    "IREN $50, NBIS $121, ASTS $100. "
+    "Always write theses in 15-20 words max. "
+    "Be direct, confident, specific. Use numbers. No fluff."
+)
 
 
 def _get_client():
@@ -83,41 +94,100 @@ def _call_ai(system: str, user: str, model: str = None) -> Optional[str]:
 
 
 def generate_signal_thesis(signal: dict) -> Optional[str]:
-    """Generate a 2-sentence trading thesis for a signal scoring 7+."""
-    system = (
-        "You are a professional wheel strategy options trader. "
-        "Write concise specific theses referencing exact data points. Never be generic."
-    )
+    """Generate a concise trading thesis with confidence rating.
 
+    Returns thesis string. Also sets signal["ai_confidence"] and
+    signal["ai_confidence_adjustment"] for score adjustment.
+    """
     ticker = signal.get("ticker", "")
     sig_type = signal.get("type", "CSP")
     price = signal.get("price", 0)
     change = signal.get("change_pct", 0)
     rsi = signal.get("rsi_14", "N/A")
     ivr = signal.get("ivr", 0)
+    iv = signal.get("iv", 0)
     bb_pct_b = signal.get("bb_pct_b", "N/A")
     vix = signal.get("vix_level", "N/A")
-    strike = signal.get("strike", 0)
+    strike_val = signal.get("strike", 0)
     premium = signal.get("premium", 0)
+    expiry = signal.get("expiry", "")
     ann_roi = signal.get("annualized_roi", 0)
     score = signal.get("score", 0)
+    opt_type = "P" if sig_type == "CSP" else "C"
 
-    nearest_support = "N/A"
+    # Key levels
     levels = signal.get("levels") or {}
-    if levels.get("nearest_support"):
-        nearest_support = f"${levels['nearest_support']:.2f}"
+    pdl = levels.get("pdl", "N/A")
+    pdh = levels.get("pdh", "N/A")
+    if isinstance(pdl, (int, float)):
+        pdl = f"${pdl:.2f}"
+    if isinstance(pdh, (int, float)):
+        pdh = f"${pdh:.2f}"
+    ma_20 = signal.get("ma_20", "N/A")
+    if isinstance(ma_20, (int, float)):
+        ma_20 = f"${ma_20:.2f}"
+    vwap = signal.get("vwap", "N/A")
+    if isinstance(vwap, (int, float)):
+        vwap = f"${vwap:.2f}"
+
+    # TA flags
+    ta_tags = signal.get("ta_tags", [])
+    ta_str = " | ".join(ta_tags[:4]) if ta_tags else "none"
+
+    # Market regime from SPY
+    spy_change = signal.get("spy_change", 0)
+    if spy_change > 0.5:
+        regime = "BULL"
+    elif spy_change < -0.5:
+        regime = "BEAR"
+    else:
+        regime = "CHOPPY"
+
+    # News (from tags if available)
+    news_str = "N/A"
 
     user = (
-        f"2-sentence trading thesis, max 40 words. "
-        f"WHY do conditions favor this specific trade?\n"
-        f"{ticker} {sig_type} | Price: ${price:.2f} ({change:+.1f}%)\n"
-        f"RSI: {rsi} | IVR: {ivr:.0f} | BB %B: {bb_pct_b}\n"
-        f"Support: {nearest_support} | VIX: {vix}\n"
-        f"Setup: {strike} @ ${premium:.2f} | Ann: {ann_roi:.0f}%\n"
-        f"Score: {score}/10"
+        f"Signal: {sig_type} on {ticker} {strike_val}{opt_type} {expiry}\n"
+        f"Price: ${price:.2f} | RSI: {rsi} | IVR: {ivr:.0f} | IV: {iv:.0f}%\n"
+        f"Score: {score}/10 | TA flags: {ta_str}\n"
+        f"Market regime: {regime} | VIX: {vix}\n"
+        f"Key levels: PDL {pdl} | PDH {pdh} | 20MA {ma_20} | VWAP {vwap}\n"
+        f"Write a 15-20 word thesis explaining WHY this trade makes "
+        f"sense RIGHT NOW given market conditions and TA setup.\n"
+        f"Then on next line write: CONFIDENCE: [HIGH/MEDIUM/LOW]"
     )
 
-    return _call_ai(system, user)
+    result = _call_ai(SNIPER_SYSTEM, user)
+    if not result:
+        return None
+
+    # Parse confidence from response
+    lines = result.strip().split("\n")
+    thesis_lines = []
+    confidence = "MEDIUM"
+    for line in lines:
+        upper = line.strip().upper()
+        if upper.startswith("CONFIDENCE:"):
+            conf_val = upper.replace("CONFIDENCE:", "").strip()
+            if "HIGH" in conf_val:
+                confidence = "HIGH"
+            elif "LOW" in conf_val:
+                confidence = "LOW"
+            else:
+                confidence = "MEDIUM"
+        else:
+            thesis_lines.append(line.strip())
+
+    thesis = " ".join(thesis_lines).strip()
+    if len(thesis) > 200:
+        thesis = thesis[:197] + "..."
+
+    # Map confidence to score adjustment
+    conf_map = {"HIGH": 0.0, "MEDIUM": -0.3, "LOW": -0.7}
+    signal["ai_confidence"] = confidence
+    signal["ai_confidence_adjustment"] = conf_map.get(confidence, -0.3)
+
+    return thesis
 
 
 def get_news_sentiment(ticker: str) -> Optional[dict]:

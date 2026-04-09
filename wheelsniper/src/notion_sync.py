@@ -19,6 +19,9 @@ NOTION_TRADE_LOG_DB = os.getenv(
     "NOTION_TRADE_LOG_DB", "0d26868c0c174ea1be3e11938099c2d4"
 )
 
+# Log the database ID at import time so it shows in Railway startup logs
+logger.info(f"Notion Trade Log DB ID: {NOTION_TRADE_LOG_DB}")
+
 # Cache open positions for 5 minutes
 _positions_cache: dict = {"data": None, "timestamp": None}
 _POSITIONS_CACHE_SECONDS = 300
@@ -179,8 +182,12 @@ async def track_position_targets(send_alert_fn=None) -> list[dict]:
 async def track_intraday_premium(send_alert_fn=None) -> list[dict]:
     """Track option premium high/low for open positions.
 
-    Fires alerts for: near day low (close window), near day high (moving against),
-    and IV spikes. Iterates ALL open positions from Notion Trade Log.
+    Fires alerts for:
+    - CSP close window (premium near day low, buy back cheap)
+    - Position moving against (premium near day high)
+    - IV spike (>25% from morning baseline)
+    - IV crush close signal (IV dropped >20% from position open IV in Notion)
+    Iterates ALL open positions from Notion Trade Log.
     """
     global _intraday_data, _intraday_date
 
@@ -219,6 +226,7 @@ async def track_intraday_premium(send_alert_fn=None) -> list[dict]:
                     "day_low": current,
                     "morning_price": current,
                     "morning_iv": current_iv,
+                    "prices": [current],
                 }
             else:
                 entry = _intraday_data[key]
@@ -226,13 +234,21 @@ async def track_intraday_premium(send_alert_fn=None) -> list[dict]:
                     entry["day_high"] = current
                 if current < entry["day_low"]:
                     entry["day_low"] = current
+                entry["prices"].append(current)
 
             entry = _intraday_data[key]
             profit_pct = ((premium - current) / premium) * 100 if premium > 0 else 0
 
-            # Alert 1: Near day low (best close window) — within 20% of day low
-            if (entry["day_low"] > 0
-                    and current <= entry["day_low"] * 1.20
+            # Calculate pct_of_range for timing intelligence
+            day_range = entry["day_high"] - entry["day_low"]
+            if day_range > 0:
+                pct_of_range = (current - entry["day_low"]) / day_range
+            else:
+                pct_of_range = 0.5
+
+            # Alert 1: CSP CLOSE WINDOW — premium near day low, buy back cheap
+            if (pct_of_range <= 0.20
+                    and current <= premium * 0.50
                     and profit_pct > 20):
                 dedup_key = f"intraday_{ticker}_{strike}_day_low_{today_str}"
                 if _should_alert(dedup_key, hours=2):
@@ -245,15 +261,16 @@ async def track_intraday_premium(send_alert_fn=None) -> list[dict]:
                         "day_low": round(entry["day_low"], 2),
                         "day_high": round(entry["day_high"], 2),
                         "profit_pct": round(profit_pct, 1),
+                        "original_premium": round(premium, 2),
+                        "pct_of_range": round(pct_of_range, 2),
                     }
                     alerts.append(alert)
                     if send_alert_fn:
                         msg = _format_day_low_alert(alert)
                         await send_alert_fn(msg)
 
-            # Alert 2: Near day high (moving against) — within 80% of day high
-            if (entry["day_high"] > 0
-                    and current >= entry["day_high"] * 0.80
+            # Alert 2: Near day high (moving against)
+            if (pct_of_range >= 0.80
                     and profit_pct < -15):
                 dedup_key = f"intraday_{ticker}_{strike}_day_high_{today_str}"
                 if _should_alert(dedup_key, hours=2):
@@ -292,10 +309,90 @@ async def track_intraday_premium(send_alert_fn=None) -> list[dict]:
                         msg = _format_iv_spike_alert(alert)
                         await send_alert_fn(msg)
 
+            # Alert 4: IV CRUSH — IV dropped >20% from position open IV (from Notion)
+            iv_at_open = pos.get("iv_at_open")
+            if (current_iv and iv_at_open
+                    and iv_at_open > 0
+                    and current_iv < iv_at_open * 0.80):
+                dedup_key = f"intraday_{ticker}_{strike}_iv_crush_{today_str}"
+                if _should_alert(dedup_key, hours=4):
+                    alert = {
+                        "alert_type": "iv_crush",
+                        "ticker": ticker, "type": pos["type"],
+                        "strike": strike, "expiry": expiry_str,
+                        "opt_type": opt_type,
+                        "current_iv": round(current_iv, 1),
+                        "open_iv": round(iv_at_open, 1),
+                        "profit_pct": round(profit_pct, 1),
+                    }
+                    alerts.append(alert)
+                    if send_alert_fn:
+                        msg = _format_iv_crush_alert(alert)
+                        await send_alert_fn(msg)
+
         except Exception as e:
             logger.debug(f"Intraday tracking failed for {pos.get('ticker')}: {e}")
 
     return alerts
+
+
+def get_premium_timing(ticker: str, strike: float, expiry: str, trade_type: str) -> dict:
+    """Get premium timing data for a signal candidate.
+
+    Returns pct_of_range and timing flags for CC/CSP timing intelligence.
+    Called by signal_engine to add timing context to new signals.
+    """
+    global _intraday_data, _intraday_date
+
+    today_str = datetime.now(ET).strftime("%Y-%m-%d")
+    if _intraday_date != today_str:
+        _intraday_data = {}
+        _intraday_date = today_str
+
+    opt_type = "P" if trade_type == "CSP" else "C"
+    key = f"{ticker}_{strike}{opt_type}_{expiry}"
+
+    current = _get_current_option_price(ticker, strike, expiry, trade_type)
+    if current is None:
+        return {"pct_of_range": None, "timing_tag": None}
+
+    if key not in _intraday_data:
+        _intraday_data[key] = {
+            "day_high": current,
+            "day_low": current,
+            "morning_price": current,
+            "morning_iv": None,
+            "prices": [current],
+        }
+    else:
+        entry = _intraday_data[key]
+        if current > entry["day_high"]:
+            entry["day_high"] = current
+        if current < entry["day_low"]:
+            entry["day_low"] = current
+        entry["prices"].append(current)
+
+    entry = _intraday_data[key]
+    day_range = entry["day_high"] - entry["day_low"]
+    if day_range > 0:
+        pct_of_range = (current - entry["day_low"]) / day_range
+    else:
+        pct_of_range = 0.5
+
+    timing_tag = None
+    if trade_type == "CC" and pct_of_range >= 0.80:
+        timing_tag = (
+            f"\U0001f514 PREMIUM PEAK \u2014 near day high ${current:.2f}. "
+            f"Best fill window NOW."
+        )
+
+    return {
+        "pct_of_range": round(pct_of_range, 2),
+        "current_premium": round(current, 2),
+        "day_high": round(entry["day_high"], 2),
+        "day_low": round(entry["day_low"], 2),
+        "timing_tag": timing_tag,
+    }
 
 
 def log_signal_to_notion(signal: dict) -> bool:
@@ -462,10 +559,14 @@ def _format_close_target_alert(alert: dict) -> str:
 
 
 def _format_day_low_alert(alert: dict) -> str:
+    orig = alert.get("original_premium", 0)
+    pct_str = ""
+    if orig > 0:
+        pct_str = f" ({alert['profit_pct']:.0f}% of original ${orig:.2f})"
     return (
-        f"\U0001f7e2 {alert['ticker']} {alert['strike']}{alert['opt_type']} "
-        f"\u2014 Premium near day low ${alert['current']:.2f}.\n"
-        f"Best fill window to BUY BACK. Consider closing.\n"
+        f"\U0001f4b0 {alert['ticker']} ${alert['strike']}{alert['opt_type']} "
+        f"\u2014 Premium crushed to ${alert['current']:.2f}{pct_str}.\n"
+        f"Close now, lock profit, redeploy capital.\n"
         f"{SEP}\n"
         f"Day range: ${alert['day_low']:.2f}\u2013${alert['day_high']:.2f}\n"
         f"Profit if closed now: {alert['profit_pct']:.0f}%"
@@ -474,7 +575,7 @@ def _format_day_low_alert(alert: dict) -> str:
 
 def _format_day_high_alert(alert: dict) -> str:
     return (
-        f"\U0001f534 {alert['ticker']} {alert['strike']}{alert['opt_type']} "
+        f"\U0001f534 {alert['ticker']} ${alert['strike']}{alert['opt_type']} "
         f"\u2014 Premium near day high ${alert['current']:.2f}.\n"
         f"Position moving against you. Review.\n"
         f"{SEP}\n"
@@ -491,6 +592,17 @@ def _format_iv_spike_alert(alert: dict) -> str:
         f"{SEP}\n"
         f"+{alert['iv_change']:.0f}% spike \u2014 premium inflated\n"
         f"Open position: {alert['type']} \u2014 high IV = good roll window"
+    )
+
+
+def _format_iv_crush_alert(alert: dict) -> str:
+    return (
+        f"\U0001f4c9 IV CRUSH \u2014 {alert['ticker']} "
+        f"IV now {alert['current_iv']:.0f}% vs {alert['open_iv']:.0f}% at open.\n"
+        f"Premium decayed fast. Consider closing "
+        f"${alert['strike']}{alert['opt_type']}.\n"
+        f"{SEP}\n"
+        f"P&L: {alert['profit_pct']:.0f}%"
     )
 
 

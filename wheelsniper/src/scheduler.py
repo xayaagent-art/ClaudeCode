@@ -45,7 +45,7 @@ async def run_scan():
     config = load_config()
     dedup_hours = config.get("alert_dedup_hours", 4)
 
-    # CSP signals (only alert on score >= 7)
+    # CSP signals (only alert on score >= 6)
     for signal in scan_csp_signals(config):
         if not signal.get("should_alert", True):
             continue
@@ -53,12 +53,20 @@ async def run_scan():
             thesis = generate_signal_thesis(signal)
             if thesis:
                 signal["ai_thesis"] = thesis
+            # Apply AI confidence to score
+            ai_adj = signal.get("ai_confidence_adjustment", 0)
+            if ai_adj != 0:
+                signal["score"] = round(max(0, min(10, signal["score"] + ai_adj)), 1)
+                if signal["score"] < 6:
+                    signal["should_alert"] = False
+            if not signal["should_alert"]:
+                continue
             msg = format_csp_alert(signal)
             await send_alert(msg)
             record_alert(signal["ticker"], "CSP", msg)
             log_signal_to_notion(signal)
 
-    # CC signals (only alert on score >= 7)
+    # CC signals (only alert on score >= 6)
     for signal in scan_cc_signals(config):
         if not signal.get("should_alert", True):
             continue
@@ -66,6 +74,14 @@ async def run_scan():
             thesis = generate_signal_thesis(signal)
             if thesis:
                 signal["ai_thesis"] = thesis
+            # Apply AI confidence to score
+            ai_adj = signal.get("ai_confidence_adjustment", 0)
+            if ai_adj != 0:
+                signal["score"] = round(max(0, min(10, signal["score"] + ai_adj)), 1)
+                if signal["score"] < 6:
+                    signal["should_alert"] = False
+            if not signal["should_alert"]:
+                continue
             msg = format_cc_alert(signal)
             await send_alert(msg)
             record_alert(signal["ticker"], "CC", msg)

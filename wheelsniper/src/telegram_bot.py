@@ -175,8 +175,10 @@ def _score_line(signal: dict) -> str:
     if score is None:
         return ""
     thesis = signal.get("ai_thesis")
+    confidence = signal.get("ai_confidence")
+    conf_str = f" | AI: {confidence}" if confidence else ""
     thesis_line = f"\n\U0001f9e0 {thesis}" if thesis else ""
-    return f"\n{SEP}\n{label} ({score}/10){thesis_line}"
+    return f"\n{SEP}\n{label} ({score}/10){conf_str}{thesis_line}"
 
 
 def _tags_block(tags: list) -> str:
