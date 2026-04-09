@@ -10,8 +10,13 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def score_signal(signal: dict) -> dict:
+def score_signal(signal: dict, ta_adjustment: float = 0.0, ai_adjustment: float = 0.0) -> dict:
     """Score a signal 1-10 based on technical indicators.
+
+    Args:
+        signal: The signal dict with all data
+        ta_adjustment: Score adjustment from seller TA checks (Upgrade 7)
+        ai_adjustment: Score adjustment from AI confidence (Upgrade 8)
 
     Returns dict with: score, breakdown, label, should_alert, should_log
     """
@@ -142,8 +147,14 @@ def score_signal(signal: dict) -> dict:
     breakdown["vix"] = pts
     total += pts
 
+    # Apply TA and AI adjustments
+    breakdown["ta"] = ta_adjustment
+    breakdown["ai"] = ai_adjustment
+    total += ta_adjustment + ai_adjustment
+
     # Round and classify
     score = round(total, 1)
+    score = max(score, 0.0)
     score = min(score, 10.0)
 
     if score >= 9:

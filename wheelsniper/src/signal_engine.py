@@ -25,6 +25,7 @@ from src.earnings_filter import has_upcoming_earnings
 from src.iv_calculator import calculate_ivr
 from src.key_levels import get_key_levels
 from src.market_data import get_market_data, get_options_chain, get_premarket_data, get_vix
+from src.notion_sync import get_premium_timing
 from src.sector_guard import check_sector_concentration, record_scan_sector
 from src.signal_scorer import score_signal
 from src.strike_selector import calculate_yield, select_call_strike, select_put_strike
@@ -135,6 +136,118 @@ def _get_time_weighted_target(days_held: int, dte: int) -> int:
     return 25
 
 
+def apply_seller_ta(signal: dict) -> dict:
+    """Apply options-seller-specific TA checks to a signal.
+
+    Adds/subtracts score points and TA flags. Runs AFTER base signal fires.
+    Returns dict with: ta_adjustment (float), ta_tags (list), suppress (bool).
+    """
+    sig_type = signal.get("type", "CSP")
+    adjustment = 0.0
+    ta_tags = []
+    suppress = False
+
+    levels = signal.get("levels") or {}
+    rsi = signal.get("rsi_14")
+    price = signal.get("price", 0)
+    strike_val = signal.get("strike", 0)
+    vwap = signal.get("vwap")
+    vwap_position = signal.get("vwap_position", "unknown")
+    macd_trend = signal.get("macd_trend", "")
+    bb_width = signal.get("bb_width")
+    bb_upper = signal.get("bb_upper")
+    bb_lower = signal.get("bb_lower")
+    ma_20 = signal.get("ma_20", 0)
+    dte = signal.get("dte", 0)
+    delta = signal.get("delta", 0)
+    pdl = levels.get("pdl")
+    pdh = levels.get("pdh")
+    pwl = levels.get("pwl")
+
+    if sig_type == "CSP":
+        # 1. SUPPORT QUALITY — strike below PDL, PWL, and 20MA
+        floors = 0
+        if pdl and strike_val < pdl:
+            floors += 1
+        if pwl and strike_val < pwl:
+            floors += 1
+        if ma_20 and strike_val < ma_20:
+            floors += 1
+        if floors >= 3:
+            adjustment += 0.5
+            ta_tags.append("\U0001f3f0 Triple floor below strike")
+
+        # 2. RSI OVERSOLD BOUNCE — RSI < 35 AND price above PDL
+        if rsi is not None and rsi < 35 and pdl and price > pdl:
+            adjustment += 0.5
+            ta_tags.append("\u26a1 Oversold bounce setup")
+
+        # 3. VWAP RECLAIM — price crossed above VWAP
+        if vwap_position == "above" and vwap and price > vwap:
+            adjustment += 0.5
+            ta_tags.append("\U0001f4c8 VWAP reclaim \u2014 bullish intraday")
+
+        # 4. BREAKDOWN — price < PDL AND price < PWL AND MACD bearish
+        if (pdl and pwl and price < pdl and price < pwl
+                and macd_trend == "bearish"):
+            adjustment -= 2.0
+            ta_tags.append("\u26d4 BREAKDOWN \u2014 avoid CSP")
+            if (signal.get("score", 0) + adjustment) < 5:
+                suppress = True
+
+        # 5. BB SQUEEZE — volatility compressed, IV expansion likely
+        if bb_width is not None and bb_lower and bb_upper:
+            bb_mid = (bb_upper + bb_lower) / 2
+            if bb_mid > 0 and (bb_upper - bb_lower) / bb_mid < 0.15:
+                adjustment += 0.5
+                ta_tags.append("\U0001f3af BB squeeze \u2014 IV expansion likely")
+
+    else:  # CC
+        # 1. RESISTANCE QUALITY — strike above PDH, 20MA, and VWAP
+        ceilings = 0
+        if pdh and strike_val > pdh:
+            ceilings += 1
+        if ma_20 and strike_val > ma_20:
+            ceilings += 1
+        if vwap and strike_val > vwap:
+            ceilings += 1
+        if ceilings >= 3:
+            adjustment += 0.5
+            ta_tags.append("\U0001f3f0 Triple ceiling above strike")
+
+        # 2. RSI OVERBOUGHT FADE — RSI > 68 AND price near PDH
+        if rsi is not None and rsi > 68 and pdh and abs(price - pdh) / price < 0.02:
+            adjustment += 0.5
+            ta_tags.append("\U0001f6d1 Overbought \u2014 CC well protected")
+
+        # 3. DELTA SWEET SPOT
+        if delta > 0.50:
+            ta_tags.append("\u26a0\ufe0f High delta \u2014 aggressive, cap risk high")
+        elif 0.30 <= delta <= 0.50:
+            ta_tags.append("\u2705 Sweet spot delta")
+        elif delta < 0.25:
+            ta_tags.append("\U0001f4a4 Low delta \u2014 minimal premium, low risk")
+
+        # 4. BREAKOUT — price > PDH AND RSI > 70 AND MACD bullish
+        if (pdh and price > pdh and rsi is not None and rsi > 70
+                and macd_trend == "bullish"):
+            adjustment -= 2.0
+            ta_tags.append("\u26d4 BREAKOUT \u2014 CC strike at risk")
+            if (signal.get("score", 0) + adjustment) < 5:
+                suppress = True
+
+        # 5. THETA DECAY CURVE — DTE 21-35 is peak theta zone
+        if 21 <= dte <= 35:
+            adjustment += 0.5
+            ta_tags.append("\u23f1\ufe0f Peak theta zone")
+
+    return {
+        "ta_adjustment": round(adjustment, 1),
+        "ta_tags": ta_tags,
+        "suppress": suppress,
+    }
+
+
 def scan_csp_signals(config: dict = None) -> list[dict]:
     """Scan watchlist for Cash-Secured Put entry signals.
 
@@ -155,12 +268,22 @@ def scan_csp_signals(config: dict = None) -> list[dict]:
 
         signal = evaluate_csp(ticker, params)
         if signal:
-            scoring = score_signal(signal)
+            # Apply seller TA checks (score adjustment + flags)
+            ta = apply_seller_ta(signal)
+            signal["ta_tags"] = ta["ta_tags"]
+            signal["tags"].extend(ta["ta_tags"])
+
+            scoring = score_signal(signal, ta_adjustment=ta["ta_adjustment"])
             signal["score"] = scoring["score"]
             signal["score_label"] = scoring["label"]
             signal["score_breakdown"] = scoring["breakdown"]
             signal["should_alert"] = scoring["should_alert"]
             signal["sector"] = sector_check["sector"]
+
+            # Suppress if TA breakdown detected
+            if ta["suppress"]:
+                signal["should_alert"] = False
+
             signals.append(signal)
             record_scan_sector(scan_sectors, ticker)
 
@@ -182,11 +305,32 @@ def scan_cc_signals(config: dict = None) -> list[dict]:
             continue
         signal = evaluate_cc(ticker, pos, params)
         if signal:
-            scoring = score_signal(signal)
+            # Apply seller TA checks (score adjustment + flags)
+            ta = apply_seller_ta(signal)
+            signal["ta_tags"] = ta["ta_tags"]
+            signal["tags"].extend(ta["ta_tags"])
+
+            scoring = score_signal(signal, ta_adjustment=ta["ta_adjustment"])
             signal["score"] = scoring["score"]
             signal["score_label"] = scoring["label"]
             signal["score_breakdown"] = scoring["breakdown"]
             signal["should_alert"] = scoring["should_alert"]
+
+            # Suppress if TA breakdown detected
+            if ta["suppress"]:
+                signal["should_alert"] = False
+
+            # Premium timing intelligence for CC
+            try:
+                timing = get_premium_timing(
+                    ticker, signal["strike"], signal["expiry"], "CC",
+                )
+                if timing.get("timing_tag") and signal["should_alert"]:
+                    signal["tags"].append(timing["timing_tag"])
+                    signal["premium_timing"] = timing
+            except Exception:
+                pass
+
             signals.append(signal)
 
     return signals
