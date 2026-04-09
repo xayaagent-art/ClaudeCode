@@ -529,6 +529,11 @@ async def _post_init(application: Application):
     await application.bot.set_my_commands(commands)
     logger.info("Bot commands registered with Telegram")
 
+    # Log which Notion DB the /notion and /positions handlers will query
+    from src.notion_sync import NOTION_DB_ID
+    logger.info(f"[BOT] /notion handler using DB: {NOTION_DB_ID}")
+    logger.info(f"[BOT] /positions handler using DB: {NOTION_DB_ID}")
+
 
 def create_bot() -> Application:
     """Create and configure the Telegram bot application."""
