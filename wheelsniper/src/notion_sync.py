@@ -65,9 +65,11 @@ def get_open_positions() -> list[dict]:
     try:
         result = client.databases.query(
             database_id=NOTION_DB_ID,
-            filter={"property": "Status", "status": {"equals": "Open"}},
+            filter={"property": "Status", "select": {"equals": "Open"}},
         )
-        logger.info(f"[NOTION] Query returned {len(result.get('results', []))} pages")
+        logger.info(f"[NOTION] Filter used: select equals Open")
+        logger.info(f"[NOTION] Raw results count: {len(result.get('results', []))}")
+        logger.info(f"[NOTION] First result: {result['results'][0] if result.get('results') else 'EMPTY'}")
 
         positions = []
         for page in result.get("results", []):
