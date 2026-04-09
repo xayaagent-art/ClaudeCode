@@ -15,7 +15,7 @@ import pytz
 logger = logging.getLogger(__name__)
 ET = pytz.timezone("America/New_York")
 
-NOTION_DB_ID = "0d26868c0c174ea1be3e11938099c2d4"
+NOTION_DB_ID = os.getenv("NOTION_POSITIONS_DB", "6d19eca507e74ccc89953615ca7d421e")
 
 # Log the database ID at import time so it shows in Railway startup logs
 logger.info(f"[NOTION] Using database ID: {NOTION_DB_ID}")
