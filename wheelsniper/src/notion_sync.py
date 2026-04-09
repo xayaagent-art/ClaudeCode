@@ -15,12 +15,10 @@ import pytz
 logger = logging.getLogger(__name__)
 ET = pytz.timezone("America/New_York")
 
-NOTION_TRADE_LOG_DB = os.getenv(
-    "NOTION_TRADE_LOG_DB", "0d26868c0c174ea1be3e11938099c2d4"
-)
+NOTION_DB_ID = "0d26868c0c174ea1be3e11938099c2d4"
 
 # Log the database ID at import time so it shows in Railway startup logs
-logger.info(f"Notion Trade Log DB ID: {NOTION_TRADE_LOG_DB}")
+logger.info(f"[NOTION] Using database ID: {NOTION_DB_ID}")
 
 # Cache open positions for 5 minutes
 _positions_cache: dict = {"data": None, "timestamp": None}
@@ -66,9 +64,10 @@ def get_open_positions() -> list[dict]:
 
     try:
         result = client.databases.query(
-            database_id=NOTION_TRADE_LOG_DB,
+            database_id=NOTION_DB_ID,
             filter={"property": "Status", "status": {"equals": "Open"}},
         )
+        logger.info(f"[NOTION] Query returned {len(result.get('results', []))} pages")
 
         positions = []
         for page in result.get("results", []):
@@ -436,7 +435,7 @@ def log_signal_to_notion(signal: dict) -> bool:
             properties["IV at Open"] = {"number": round(iv, 1)}
 
         client.pages.create(
-            parent={"database_id": NOTION_TRADE_LOG_DB},
+            parent={"database_id": NOTION_DB_ID},
             properties=properties,
         )
         logger.info(f"Logged signal to Notion: {ticker} {sig_type} {strike}{opt_type}")
