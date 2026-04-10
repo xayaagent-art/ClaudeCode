@@ -2,11 +2,13 @@
 scheduler.py — APScheduler config for market-hours-only polling.
 
 Runs the pre-market scan at 8:00am ET, morning brief at 9:30am ET,
-signal scan every 5 minutes between 9:35am–3:55pm ET.
+signal scan every 1 minute between 9:35am–3:55pm ET with a smart
+throttle that only scans movers during the midday stretch.
 Skips weekends and holidays.
 """
 
 import asyncio
+import copy
 import logging
 from datetime import datetime
 
@@ -17,7 +19,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from src.ai_analyst import generate_signal_thesis
 from src.alert_manager import cleanup_old_alerts, record_alert, should_alert
-from src.market_data import get_premarket_data, get_vix
+from src.market_data import get_premarket_data, get_stock_snapshot, get_vix
 from src.morning_brief import build_morning_brief
 from src.notion_sync import log_signal_to_notion, track_intraday_premium, track_position_targets
 from src.position_tracker import get_monthly_summary
@@ -33,6 +35,69 @@ from src.telegram_bot import (
 logger = logging.getLogger(__name__)
 ET = pytz.timezone("America/New_York")
 
+# Per-ticker last scan price, used to detect >1% movers during midday throttle
+_last_scan_price: dict[str, float] = {}
+
+# Midday move threshold — only scan tickers that moved more than this %
+_MIDDAY_MOVE_THRESHOLD_PCT = 1.0
+
+
+def _classify_scan_window(now: datetime) -> str:
+    """Return scan window label for current ET time: full | movers_only | idle."""
+    hm = now.hour * 60 + now.minute
+    # 9:30 - 10:30 AM ET (first hour)
+    if 570 <= hm < 630:
+        return "full"
+    # 10:30 AM - 3:30 PM ET (midday, movers-only)
+    if 630 <= hm < 930:
+        return "movers_only"
+    # 3:30 - 3:55 PM ET (end of day premium spike)
+    if 930 <= hm <= 955:
+        return "full"
+    return "idle"
+
+
+def _select_active_tickers(tickers: list, window: str) -> list:
+    """Choose which tickers to scan based on the current window.
+
+    full         -> all tickers (baseline prices refreshed)
+    movers_only  -> only tickers whose price moved > 1% since last scan
+    idle         -> none
+    """
+    global _last_scan_price
+
+    if not tickers:
+        return []
+
+    if window == "full":
+        active = list(tickers)
+        for t in active:
+            snap = get_stock_snapshot(t)
+            if snap and snap.get("price"):
+                _last_scan_price[t] = float(snap["price"])
+        return active
+
+    if window == "movers_only":
+        active = []
+        for t in tickers:
+            snap = get_stock_snapshot(t)
+            if not snap or not snap.get("price"):
+                continue
+            price = float(snap["price"])
+            last = _last_scan_price.get(t)
+            if last is None or last <= 0:
+                # No baseline yet → set and include
+                _last_scan_price[t] = price
+                active.append(t)
+                continue
+            move_pct = abs(price - last) / last * 100
+            if move_pct > _MIDDAY_MOVE_THRESHOLD_PCT:
+                active.append(t)
+                _last_scan_price[t] = price
+        return active
+
+    return []
+
 
 def load_config() -> dict:
     with open("config.yaml", "r") as f:
@@ -40,13 +105,53 @@ def load_config() -> dict:
 
 
 async def run_scan():
-    """Execute a full signal scan and send alerts for new signals."""
-    logger.info("Running scheduled scan...")
+    """Execute a signal scan with smart throttle and send alerts for new signals.
+
+    Scan windows (ET):
+      09:30-10:30  full (all tickers)
+      10:30-15:30  movers_only (only tickers with >1% move since last scan)
+      15:30-15:55  full
+      other        idle (scheduler should not fire outside hours anyway)
+    """
     config = load_config()
-    dedup_hours = config.get("alert_dedup_hours", 4)
+    dedup_hours = config.get("alert_dedup_hours", 1.5)
+
+    now_et = datetime.now(ET)
+    window = _classify_scan_window(now_et)
+    if window == "idle":
+        logger.debug(f"Scan skipped — outside active windows at {now_et.strftime('%H:%M')}")
+        return
+
+    # Build throttled config with only active tickers for this window
+    csp_watchlist = config.get("watchlist", []) or []
+    positions = config.get("positions", {}) or {}
+    cc_candidates = [t for t, p in positions.items()
+                     if p and p.get("shares", 0) >= 100]
+
+    active_csp = _select_active_tickers(csp_watchlist, window)
+    active_cc = _select_active_tickers(cc_candidates, window)
+
+    logger.info(
+        f"Scan window={window} @ {now_et.strftime('%H:%M ET')} "
+        f"\u2014 CSP {len(active_csp)}/{len(csp_watchlist)} "
+        f"CC {len(active_cc)}/{len(cc_candidates)}"
+    )
+
+    if not active_csp and not active_cc:
+        logger.info("No active tickers this scan (smart throttle).")
+        # Still run close-signal + notion tracking below
+        csp_config = cc_config = None
+    else:
+        csp_config = copy.deepcopy(config)
+        csp_config["watchlist"] = active_csp
+        cc_config = copy.deepcopy(config)
+        cc_config["positions"] = {
+            t: p for t, p in positions.items() if t in active_cc
+        }
 
     # CSP signals (only alert on score >= 6)
-    for signal in scan_csp_signals(config):
+    csp_iter = scan_csp_signals(csp_config) if csp_config else []
+    for signal in csp_iter:
         if not signal.get("should_alert", True):
             continue
         if should_alert(signal["ticker"], "CSP", dedup_hours):
@@ -67,7 +172,8 @@ async def run_scan():
             log_signal_to_notion(signal)
 
     # CC signals (only alert on score >= 6)
-    for signal in scan_cc_signals(config):
+    cc_iter = scan_cc_signals(cc_config) if cc_config else []
+    for signal in cc_iter:
         if not signal.get("should_alert", True):
             continue
         if should_alert(signal["ticker"], "CC", dedup_hours):
@@ -184,11 +290,12 @@ def create_scheduler() -> AsyncIOScheduler:
 
     Schedule:
     - Morning brief: 9:30 AM ET, Mon–Fri
-    - Signal scan: Every 5 min, 9:35 AM – 3:55 PM ET, Mon–Fri
+    - Signal scan: Every 1 min, 9:35 AM – 3:55 PM ET, Mon–Fri
+      (smart-throttled: movers-only 10:30-15:30, full otherwise)
     - Daily cleanup: 4:00 PM ET
     """
     config = load_config()
-    interval = config.get("poll_interval_minutes", 5)
+    interval = config.get("poll_interval_minutes", 1)
     market = config.get("market_hours", {})
     open_time = market.get("open", "09:35")
     close_time = market.get("close", "15:55")
