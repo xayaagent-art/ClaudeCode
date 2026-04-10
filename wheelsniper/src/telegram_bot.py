@@ -195,8 +195,11 @@ def _urgency_emoji(score: float) -> str:
 
 # Priority order for compact TA flag display (lower index = higher priority)
 _TA_FLAG_PRIORITY = [
+    ("whale activity", "\U0001f40b Whale activity"),
     ("triple floor", "\U0001f3f0 Triple floor"),
     ("triple ceiling", "\U0001f3f0 Triple ceiling"),
+    ("iv > hv", "\U0001f4ca IV > HV (overpriced)"),
+    ("iv < hv", "\u26a0\ufe0f IV < HV (cheap)"),
     ("oversold bounce", "\u26a1 Oversold bounce"),
     ("overbought", "\U0001f4db Overbought fade"),
     ("vwap reclaim", "\U0001f4c8 VWAP reclaimed"),
@@ -336,6 +339,8 @@ def format_csp_alert(signal: dict) -> str:
     rsi_val = signal.get("rsi_14")
     rsi_str = f"{rsi_val:.0f}" if rsi_val is not None else "N/A"
     ivr_str = f"{signal['ivr']:.0f}"
+    ivp_val = signal.get("ivp")
+    ivp_str = f" \u00b7 IVP {ivp_val:.0f}%" if ivp_val is not None else ""
     iv_str = f"{signal['iv']:.0f}%"
     vix_val = signal.get("vix_level")
     vix_str = f"{vix_val:.0f}" if vix_val is not None else "N/A"
@@ -365,7 +370,7 @@ def format_csp_alert(signal: dict) -> str:
         f"{urgency} \u2014 {ticker} CSP  [{sig_time}]",
         f"${strike:.2f}P {expiry} \u00b7 {dte}DTE \u00b7 ${premium:.2f} \u00b7 {ann:.0f}% ann \u00b7 \u0394{delta:.2f}",
         f"${price:.2f} {from_open_arrow}{abs(change_from_open):.1f}% from open \u00b7 {pdl_str} \u00b7 {vol_chip}",
-        f"RSI {rsi_str} \u00b7 IVR {ivr_str} \u00b7 IV {iv_str} \u00b7 VIX {vix_str}",
+        f"RSI {rsi_str} \u00b7 IVR {ivr_str}{ivp_str} \u00b7 IV {iv_str} \u00b7 VIX {vix_str}",
         ta_line,
     ]
     lines.extend(optional_lines)
@@ -414,6 +419,8 @@ def format_cc_alert(signal: dict) -> str:
     rsi_val = signal.get("rsi_14")
     rsi_str = f"{rsi_val:.0f}" if rsi_val is not None else "N/A"
     ivr_str = f"{signal['ivr']:.0f}"
+    ivp_val = signal.get("ivp")
+    ivp_str = f" \u00b7 IVP {ivp_val:.0f}%" if ivp_val is not None else ""
     iv_str = f"{signal['iv']:.0f}%"
     vix_val = signal.get("vix_level")
     vix_str = f"{vix_val:.0f}" if vix_val is not None else "N/A"
@@ -445,7 +452,7 @@ def format_cc_alert(signal: dict) -> str:
         f"{urgency} \u2014 {ticker} CC  [{sig_time}]",
         f"${strike:.2f}C {expiry} \u00b7 {dte}DTE \u00b7 ${premium:.2f} \u00b7 {ann:.0f}% ann \u00b7 \u0394{delta:.2f}",
         f"${price:.2f} {from_open_arrow}{abs(change_from_open):.1f}% from open \u00b7 {pdh_str} \u00b7 {vol_chip}",
-        f"Basis ${cost_basis:.2f} \u00b7 {mode_label} mode \u00b7 RSI {rsi_str} \u00b7 IVR {ivr_str} \u00b7 IV {iv_str} \u00b7 VIX {vix_str}",
+        f"Basis ${cost_basis:.2f} \u00b7 {mode_label} mode \u00b7 RSI {rsi_str} \u00b7 IVR {ivr_str}{ivp_str} \u00b7 IV {iv_str} \u00b7 VIX {vix_str}",
         ta_line,
     ]
     lines.extend(optional_lines)

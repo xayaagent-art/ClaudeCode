@@ -448,6 +448,76 @@ def log_signal_to_notion(signal: dict) -> bool:
         return False
 
 
+def get_closed_profit_positions(
+    year: Optional[int] = None,
+    month: Optional[int] = None,
+) -> list[dict]:
+    """Query Trade Log for Status = 'Closed - Profit', optionally filtered by month.
+
+    Scans pages whose Close Date (or Open Date fallback) falls in the given
+    year/month. If year/month are None, returns all closed-profit positions.
+
+    Returns a list of dicts shaped like get_open_positions() plus:
+      close_date: str | None
+      close_premium: float | None
+      profit: float | None  (dollars booked)
+    """
+    client = _get_client()
+    if not client:
+        return []
+
+    try:
+        result = client.databases.query(
+            database_id=NOTION_DB_ID,
+            filter={"property": "Status", "select": {"equals": "Closed - Profit"}},
+        )
+    except Exception as e:
+        logger.error(f"Notion closed-profit query failed: {e}")
+        return []
+
+    positions = []
+    for page in result.get("results", []):
+        props = page["properties"]
+        open_date = _get_date(props.get("Open Date"))
+        close_date = _get_date(props.get("Close Date")) or open_date
+
+        if year is not None and month is not None:
+            if not close_date:
+                continue
+            try:
+                d = datetime.strptime(close_date, "%Y-%m-%d")
+            except ValueError:
+                continue
+            if d.year != year or d.month != month:
+                continue
+
+        premium = _get_number(props.get("Premium Received")) or 0
+        close_premium = _get_number(props.get("Close Premium")) or 0
+        contracts = _get_number(props.get("Contracts")) or 1
+        profit = (premium - close_premium) * 100 * contracts
+
+        pos = {
+            "page_id": page["id"],
+            "ticker": _get_text(props.get("Ticker")),
+            "type": _get_select(props.get("Type")),
+            "strike": _get_number(props.get("Strike")),
+            "expiry": _get_date(props.get("Expiry")),
+            "premium": premium,
+            "close_premium": close_premium,
+            "contracts": contracts,
+            "open_date": open_date,
+            "close_date": close_date,
+            "profit": round(profit, 2),
+            "signal_score": _get_number(props.get("Signal Score")),
+        }
+        if pos["ticker"]:
+            positions.append(pos)
+
+    logger.info(f"Notion: {len(positions)} closed-profit positions "
+                f"{f'for {year}-{month:02d}' if year and month else '(all time)'}")
+    return positions
+
+
 def get_notion_status() -> dict:
     """Get Notion connection status for /notion command."""
     client = _get_client()

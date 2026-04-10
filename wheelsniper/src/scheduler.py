@@ -31,6 +31,8 @@ from src.telegram_bot import (
     format_premarket_alert,
     send_alert,
 )
+from src.uoa import detect_uoa, format_uoa_alert
+from src.weekly_summary import build_weekly_summary
 
 logger = logging.getLogger(__name__)
 ET = pytz.timezone("America/New_York")
@@ -193,6 +195,12 @@ async def run_scan():
             record_alert(signal["ticker"], "CC", msg)
             log_signal_to_notion(signal)
 
+    # Standalone UOA alerts (once per ticker per day)
+    try:
+        await scan_standalone_uoa(config)
+    except Exception as e:
+        logger.debug(f"Standalone UOA scan error: {e}")
+
     # Close signals
     for signal in scan_close_signals(config):
         if should_alert(signal["ticker"], "CLOSE", dedup_hours):
@@ -210,6 +218,42 @@ async def run_scan():
         logger.debug(f"Notion tracking error: {e}")
 
     logger.info("Scan complete.")
+
+
+async def scan_standalone_uoa(config: dict):
+    """Fire standalone UOA alerts for watchlist tickers (once per day per ticker).
+
+    Runs cheap — only triggers heavy option-chain fetching for tickers that
+    show unusual activity via the yfinance 3-expiration sum. Uses a 24h
+    should_alert dedup so each ticker fires at most once per day.
+    """
+    watchlist = config.get("watchlist", []) or []
+    positions = config.get("positions", {}) or {}
+    # Also cover tickers we own (CC-eligible)
+    tickers = set(watchlist)
+    for t, p in positions.items():
+        if p and p.get("shares", 0) >= 100:
+            tickers.add(t)
+
+    for ticker in sorted(tickers):
+        try:
+            uoa = detect_uoa(ticker)
+            if not uoa or not uoa.get("unusual") or not uoa.get("direction"):
+                continue
+            # Once per ticker per day (24h dedup)
+            if not should_alert(ticker, "UOA", 24):
+                continue
+            snap = get_stock_snapshot(ticker)
+            price = snap.get("price") if snap else None
+            msg = format_uoa_alert(ticker, uoa, price)
+            await send_alert(msg)
+            record_alert(ticker, "UOA", msg)
+            logger.info(
+                f"UOA alert fired for {ticker}: {uoa['direction']} "
+                f"{uoa['volume_ratio']:.1f}x"
+            )
+        except Exception as e:
+            logger.debug(f"scan_standalone_uoa {ticker} error: {e}")
 
 
 async def run_premarket_scan():
@@ -277,6 +321,17 @@ async def run_daily_cleanup():
     """Clean up old alert history."""
     cleanup_old_alerts(days=30)
     logger.info("Old alerts cleaned up.")
+
+
+async def run_weekly_summary():
+    """Build and send the weekly P&L + signal-stats summary."""
+    logger.info("Building weekly summary...")
+    try:
+        msg = build_weekly_summary()
+        await send_alert(msg)
+        logger.info("Weekly summary sent.")
+    except Exception as e:
+        logger.error(f"Weekly summary failed: {e}")
 
 
 def is_market_day() -> bool:
@@ -348,8 +403,18 @@ def create_scheduler() -> AsyncIOScheduler:
         misfire_grace_time=600,
     )
 
+    # Weekly summary at 4:05 PM ET on Fridays
+    scheduler.add_job(
+        run_weekly_summary,
+        CronTrigger(hour=16, minute=5, day_of_week="fri", timezone=ET),
+        id="weekly_summary",
+        name="Weekly Summary",
+        misfire_grace_time=1800,
+    )
+
     logger.info(
         f"Scheduler configured: pre-market at 8:00 ET, brief at {brief_time} ET, "
-        f"scans every {interval}min {open_time}-{close_time} ET"
+        f"scans every {interval}min {open_time}-{close_time} ET, "
+        f"weekly summary Fri 16:05 ET"
     )
     return scheduler

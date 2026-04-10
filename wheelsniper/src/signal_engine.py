@@ -22,7 +22,7 @@ import yaml
 ET = pytz.timezone("America/New_York")
 
 from src.earnings_filter import has_upcoming_earnings
-from src.iv_calculator import calculate_ivr
+from src.iv_calculator import calculate_ivp_and_hv, calculate_ivr
 from src.key_levels import get_key_levels
 from src.market_data import (
     get_market_data,
@@ -35,6 +35,7 @@ from src.notion_sync import get_premium_timing
 from src.sector_guard import check_sector_concentration, record_scan_sector
 from src.signal_scorer import score_signal
 from src.strike_selector import calculate_yield, select_call_strike, select_put_strike
+from src.uoa import detect_uoa
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,45 @@ def _get_time_context() -> dict:
     elif 930 <= hm <= 955:      # 3:30 - 3:55 PM
         note = "\U0001f514 End of day premium spike"
     return {"timestamp": timestamp, "note": note}
+
+
+def _apply_phase5_enrichment(signal: dict, sig_type: str) -> dict:
+    """Attach IVP/HV spread + UOA data to a signal.
+
+    Mutates signal in place with: ivp, hv_20, iv_hv_spread, uoa fields.
+    Returns dict with:
+      adjustment: float        (score delta from IVP/HV + UOA combined)
+      flags: list[str]         (TA-style flags to surface in compact format)
+    """
+    ticker = signal.get("ticker", "")
+    current_iv = signal.get("iv")
+    adjustment = 0.0
+    flags = []
+
+    # IVP + HV spread
+    iv_ctx = calculate_ivp_and_hv(ticker, current_iv=current_iv)
+    if iv_ctx:
+        signal["ivp"] = iv_ctx["ivp"]
+        signal["hv_20"] = iv_ctx["hv_20"]
+        signal["iv_hv_spread"] = iv_ctx["iv_hv_spread"]
+        adjustment += iv_ctx.get("score_adjustment", 0.0)
+        if iv_ctx.get("flag"):
+            flags.append(iv_ctx["flag"])
+
+    # UOA
+    uoa = detect_uoa(ticker)
+    if uoa:
+        signal["uoa"] = uoa
+        if uoa.get("unusual") and uoa.get("flag"):
+            flags.append(uoa["flag"])
+            if sig_type == "CSP":
+                adjustment += uoa.get("score_adjustment_csp", 0.0)
+                # Unusual PUT activity confirms SELL-side interest
+                # only when combined with strong support — neutral by default
+            else:
+                adjustment += uoa.get("score_adjustment_cc", 0.0)
+
+    return {"adjustment": round(adjustment, 2), "flags": flags}
 
 
 def _get_vix_note(vix_level: Optional[float], vix_env: str) -> Optional[str]:
@@ -307,8 +347,14 @@ def scan_csp_signals(config: dict = None) -> list[dict]:
             signal["signal_time"] = time_ctx["timestamp"]
             signal["time_note"] = time_ctx["note"]
 
+            # Phase 5: IVP/HV + UOA enrichment
+            phase5 = _apply_phase5_enrichment(signal, "CSP")
+            signal["ta_tags"].extend(phase5["flags"])
+            signal["tags"].extend(phase5["flags"])
+
             scoring = score_signal(
-                signal, ta_adjustment=ta["ta_adjustment"] + vol_boost,
+                signal,
+                ta_adjustment=ta["ta_adjustment"] + vol_boost + phase5["adjustment"],
             )
             signal["score"] = scoring["score"]
             signal["score_label"] = scoring["label"]
@@ -356,8 +402,14 @@ def scan_cc_signals(config: dict = None) -> list[dict]:
             signal["signal_time"] = time_ctx["timestamp"]
             signal["time_note"] = time_ctx["note"]
 
+            # Phase 5: IVP/HV + UOA enrichment
+            phase5 = _apply_phase5_enrichment(signal, "CC")
+            signal["ta_tags"].extend(phase5["flags"])
+            signal["tags"].extend(phase5["flags"])
+
             scoring = score_signal(
-                signal, ta_adjustment=ta["ta_adjustment"] + vol_boost,
+                signal,
+                ta_adjustment=ta["ta_adjustment"] + vol_boost + phase5["adjustment"],
             )
             signal["score"] = scoring["score"]
             signal["score_label"] = scoring["label"]
