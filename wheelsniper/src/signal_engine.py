@@ -24,7 +24,13 @@ ET = pytz.timezone("America/New_York")
 from src.earnings_filter import has_upcoming_earnings
 from src.iv_calculator import calculate_ivr
 from src.key_levels import get_key_levels
-from src.market_data import get_market_data, get_options_chain, get_premarket_data, get_vix
+from src.market_data import (
+    get_market_data,
+    get_options_chain,
+    get_premarket_data,
+    get_vix,
+    get_volume_context,
+)
 from src.notion_sync import get_premium_timing
 from src.sector_guard import check_sector_concentration, record_scan_sector
 from src.signal_scorer import score_signal
@@ -37,6 +43,24 @@ def load_config() -> dict:
     """Load config.yaml."""
     with open("config.yaml", "r") as f:
         return yaml.safe_load(f)
+
+
+def _get_time_context() -> dict:
+    """Return timestamp and time-of-day context for a signal.
+
+    Returns dict with:
+      timestamp: "HH:MM ET"
+      note: Opening/closing window label, or None
+    """
+    now = datetime.now(ET)
+    timestamp = now.strftime("%H:%M ET")
+    hm = now.hour * 60 + now.minute
+    note = None
+    if 570 <= hm <= 585:        # 9:30 - 9:45 AM
+        note = "\U0001f514 Opening volatility window"
+    elif 930 <= hm <= 955:      # 3:30 - 3:55 PM
+        note = "\U0001f514 End of day premium spike"
+    return {"timestamp": timestamp, "note": note}
 
 
 def _get_vix_note(vix_level: Optional[float], vix_env: str) -> Optional[str]:
@@ -273,7 +297,19 @@ def scan_csp_signals(config: dict = None) -> list[dict]:
             signal["ta_tags"] = ta["ta_tags"]
             signal["tags"].extend(ta["ta_tags"])
 
-            scoring = score_signal(signal, ta_adjustment=ta["ta_adjustment"])
+            # Volume context (Upgrade 3A): +0.5 score on SURGE
+            vol_ctx = get_volume_context(ticker)
+            signal["vol_context"] = vol_ctx
+            vol_boost = vol_ctx["score_boost"] if vol_ctx else 0.0
+
+            # Time-of-day context (Upgrade 3B)
+            time_ctx = _get_time_context()
+            signal["signal_time"] = time_ctx["timestamp"]
+            signal["time_note"] = time_ctx["note"]
+
+            scoring = score_signal(
+                signal, ta_adjustment=ta["ta_adjustment"] + vol_boost,
+            )
             signal["score"] = scoring["score"]
             signal["score_label"] = scoring["label"]
             signal["score_breakdown"] = scoring["breakdown"]
@@ -310,7 +346,19 @@ def scan_cc_signals(config: dict = None) -> list[dict]:
             signal["ta_tags"] = ta["ta_tags"]
             signal["tags"].extend(ta["ta_tags"])
 
-            scoring = score_signal(signal, ta_adjustment=ta["ta_adjustment"])
+            # Volume context (Upgrade 3A): +0.5 score on SURGE
+            vol_ctx = get_volume_context(ticker)
+            signal["vol_context"] = vol_ctx
+            vol_boost = vol_ctx["score_boost"] if vol_ctx else 0.0
+
+            # Time-of-day context (Upgrade 3B)
+            time_ctx = _get_time_context()
+            signal["signal_time"] = time_ctx["timestamp"]
+            signal["time_note"] = time_ctx["note"]
+
+            scoring = score_signal(
+                signal, ta_adjustment=ta["ta_adjustment"] + vol_boost,
+            )
             signal["score"] = scoring["score"]
             signal["score_label"] = scoring["label"]
             signal["score_breakdown"] = scoring["breakdown"]
@@ -484,6 +532,8 @@ def evaluate_csp(ticker: str, params: dict) -> Optional[dict]:
         "ticker": ticker,
         "price": data["price"],
         "change_pct": data["change_pct"],
+        "change_from_open_pct": data.get("change_from_open_pct", 0.0),
+        "today_open": data.get("today_open"),
         "ivr": ivr,
         "iv": ivr_data["current_iv"],
         "rsi_14": data["rsi_14"],
@@ -672,6 +722,8 @@ def evaluate_cc(ticker: str, position: dict, params: dict) -> Optional[dict]:
         "ticker": ticker,
         "price": data["price"],
         "change_pct": data["change_pct"],
+        "change_from_open_pct": data.get("change_from_open_pct", 0.0),
+        "today_open": data.get("today_open"),
         "ivr": ivr_data["ivr"],
         "iv": ivr_data["current_iv"],
         "rsi_14": data["rsi_14"],

@@ -8,6 +8,7 @@ Sends formatted trade signals with BB, VWAP, key levels, and provides commands:
 import logging
 import os
 from datetime import datetime
+from typing import Optional
 
 import pytz
 from telegram import BotCommand, Update
@@ -181,6 +182,117 @@ def _score_line(signal: dict) -> str:
     return f"\n{SEP}\n{label} ({score}/10){conf_str}{thesis_line}"
 
 
+def _urgency_emoji(score: float) -> str:
+    """Map signal score to urgency header emoji + label."""
+    if score is None:
+        return "\U0001f7e1 WATCH"
+    if score >= 9:
+        return "\U0001f6a8 ACT NOW"
+    if score >= 7:
+        return "\U0001f534 STRONG"
+    return "\U0001f7e1 WATCH"
+
+
+# Priority order for compact TA flag display (lower index = higher priority)
+_TA_FLAG_PRIORITY = [
+    ("triple floor", "\U0001f3f0 Triple floor"),
+    ("triple ceiling", "\U0001f3f0 Triple ceiling"),
+    ("oversold bounce", "\u26a1 Oversold bounce"),
+    ("overbought", "\U0001f4db Overbought fade"),
+    ("vwap reclaim", "\U0001f4c8 VWAP reclaimed"),
+    ("vwap lost", "\U0001f4c9 VWAP lost"),
+    ("bb squeeze", "\U0001f3af BB squeeze"),
+    ("peak theta", "\u23f1\ufe0f Peak theta zone"),
+    ("support confluence", "\U0001f4aa Support confluence"),
+    ("resistance confluence", "\U0001f4aa Resistance confluence"),
+    ("near previous day low", "\U0001f4cd Near PDL"),
+    ("near previous day high", "\U0001f4cd Near PDH"),
+]
+
+
+def _top_ta_flags(signal: dict, limit: int = 2) -> list[str]:
+    """Return up to `limit` highest-priority TA flags for compact display.
+
+    Walks the TA priority list and picks the first `limit` matches from the
+    signal's ta_tags + tags lists. Case-insensitive substring match.
+    """
+    tags = (signal.get("ta_tags") or []) + (signal.get("tags") or [])
+    tags_lc = [(t, t.lower()) for t in tags if isinstance(t, str)]
+    picked = []
+    seen = set()
+    for needle, display in _TA_FLAG_PRIORITY:
+        for original, lc in tags_lc:
+            if needle in lc and display not in seen:
+                picked.append(display)
+                seen.add(display)
+                break
+        if len(picked) >= limit:
+            break
+    return picked
+
+
+def _vol_chip(signal: dict) -> str:
+    """Return volume chip string for the compact format."""
+    vol = signal.get("vol_context") or {}
+    display = vol.get("display")
+    if display:
+        return display
+    return "Vol normal"
+
+
+def _score_tier_label(score: float) -> str:
+    """Short tier label for the footer line."""
+    if score is None:
+        return ""
+    if score >= 9:
+        return "\U0001f525 STRONG"
+    if score >= 7:
+        return "\u2b50 GOOD"
+    if score >= 6:
+        return "\U0001f44d DECENT"
+    if score >= 5:
+        return "moderate"
+    return "weak"
+
+
+def _ai_footer(signal: dict) -> str:
+    """Short AI confidence suffix for the footer line."""
+    confidence = signal.get("ai_confidence")
+    if not confidence:
+        return ""
+    return f" | AI: {confidence}"
+
+
+def _pct_from_pdl(signal: dict) -> Optional[float]:
+    """Percent distance of current price above PDL (positive = above support)."""
+    price = signal.get("price") or 0
+    levels = signal.get("levels") or {}
+    pdl = levels.get("pdl")
+    if not pdl or price <= 0:
+        return None
+    return (price - pdl) / pdl * 100
+
+
+def _pct_from_pdh(signal: dict) -> Optional[float]:
+    """Percent distance of current price below PDH (positive = below ceiling)."""
+    price = signal.get("price") or 0
+    levels = signal.get("levels") or {}
+    pdh = levels.get("pdh")
+    if not pdh or price <= 0:
+        return None
+    return (pdh - price) / pdh * 100
+
+
+def _earnings_compact(signal: dict) -> Optional[str]:
+    """Compact earnings line — only show if within 45 days."""
+    earnings = signal.get("earnings") or {}
+    days = earnings.get("days_until")
+    date = earnings.get("earnings_date")
+    if date and days is not None and days <= 45:
+        return f"\U0001f4c5 Earnings in {days}d ({date})"
+    return None
+
+
 def _tags_block(tags: list) -> str:
     """Format signal tags as a block."""
     if not tags:
@@ -189,90 +301,160 @@ def _tags_block(tags: list) -> str:
 
 
 def format_csp_alert(signal: dict) -> str:
-    """Format a CSP signal into a Telegram message with full Phase 2B data."""
-    direction = "\u2193" if signal["change_pct"] < 0 else "\u2191"
-    day_emoji = "\U0001f534" if signal["change_pct"] < 0 else "\U0001f7e2"
-    day_label = "Red day" if signal["change_pct"] < 0 else "Green day"
+    """Format a CSP signal into a compact 9-line Telegram message.
 
-    vix_note = f"\n{signal['vix_note']}" if signal.get("vix_note") else ""
+    Layout:
+      1. [URGENCY] [TICKER] CSP \u00b7 [TIME ET]
+      2. $[STRIKE]P [EXPIRY] \u00b7 [DTE]DTE \u00b7 $[PREMIUM] \u00b7 [ANN]% ann \u00b7 \u0394[DELTA]
+      3. $[PRICE] [\u00b1X.X%] from open \u00b7 [X]% from PDL \u00b7 Vol [tag]
+      4. RSI [X] \u00b7 IVR [X] \u00b7 IV [X]% \u00b7 VIX [X]
+      5. [up to 2 TA flags]
+      6. \U0001f9e0 [AI thesis]
+      7. [Earnings line — only if within 45 days]
+      8. \u2500\u2500\u2500
+      9. SELL [Xx] [TICKER] [EXPIRY] $[STRIKE]P \u00b7 Score [X]/10 [TIER]
+    """
+    ticker = signal["ticker"]
+    score = signal.get("score") or 0
+    urgency = _urgency_emoji(score)
+    sig_time = signal.get("signal_time") or datetime.now(ET).strftime("%H:%M ET")
 
-    # Build key levels + tags section
-    key_levels = _csp_key_levels_block(signal)
-    tags = _tags_block(signal.get("tags", []))
-    levels_section = ""
-    if key_levels or tags:
-        parts = [p for p in [key_levels, tags] if p]
-        levels_section = f"\n".join(parts) + "\n"
+    strike = signal["strike"]
+    expiry = signal["expiry"]
+    dte = signal["dte"]
+    premium = signal["premium"]
+    ann = signal.get("annualized_roi", signal.get("annualized_yield", 0))
+    delta = signal.get("delta", 0)
 
-    return (
-        f"\U0001f534 CSP SIGNAL \u2014 {signal['ticker']}\n"
-        f"{SEP}\n"
-        f"Price: ${signal['price']:.2f} ({direction} {abs(signal['change_pct']):.1f}%) "
-        f"{day_emoji} {day_label} \u2705\n"
-        f"RSI: {_rsi_label(signal['rsi_14'])} | IVR: {signal['ivr']:.0f} | IV: {signal['iv']:.0f}%\n"
-        f"Trend: {_macd_label(signal['macd_trend'])} | {_vix_line(signal)}{vix_note}\n"
-        f"{_bb_line(signal)}\n"
-        f"{_vwap_line(signal)}\n"
-        f"20MA: ${signal['ma_20']:.2f} | 50MA: ${signal['ma_50']:.2f} | {signal['ma_position']}\n"
-        f"{SEP}\n"
-        f"{levels_section}"
-        f"{SEP}\n"
-        f"Setup: {signal['expiry']} ${signal['strike']:.2f}P (DTE: {signal['dte']})\n"
-        f"Delta: {signal['delta']:.2f} | Premium: ${signal['premium']:.2f}\n"
-        f"Yield: {signal.get('cycle_roi', signal['yield_pct']):.1f}% / {signal['dte']} days | "
-        f"Ann: ~{signal.get('annualized_roi', signal['annualized_yield']):.0f}% "
-        f"{signal.get('yield_flag', '')}\n"
-        f"Breakeven: ${signal['breakeven']:.2f}\n"
-        f"{SEP}\n"
-        f"{_earnings_line(signal)}\n"
-        f"Action: SELL TO OPEN 1x {signal['ticker']} {signal['expiry']} ${signal['strike']:.2f}P"
-        f"{_score_line(signal)}"
+    price = signal["price"]
+    change_from_open = signal.get("change_from_open_pct", signal.get("change_pct", 0))
+    from_open_arrow = "\u2191" if change_from_open >= 0 else "\u2193"
+    pdl_pct = _pct_from_pdl(signal)
+    pdl_str = f"{pdl_pct:+.1f}% from PDL" if pdl_pct is not None else "PDL N/A"
+    vol_chip = _vol_chip(signal)
+
+    rsi_val = signal.get("rsi_14")
+    rsi_str = f"{rsi_val:.0f}" if rsi_val is not None else "N/A"
+    ivr_str = f"{signal['ivr']:.0f}"
+    iv_str = f"{signal['iv']:.0f}%"
+    vix_val = signal.get("vix_level")
+    vix_str = f"{vix_val:.0f}" if vix_val is not None else "N/A"
+
+    ta_flags = _top_ta_flags(signal, limit=2)
+    ta_line = " \u00b7 ".join(ta_flags) if ta_flags else "\u2014 no TA flags"
+
+    thesis = signal.get("ai_thesis")
+    thesis_line = f"\U0001f9e0 {thesis}" if thesis else ""
+
+    earnings = _earnings_compact(signal)
+    time_note = signal.get("time_note")
+
+    # Build optional lines (thesis, earnings, time note)
+    optional_lines = []
+    if thesis_line:
+        optional_lines.append(thesis_line)
+    if earnings:
+        optional_lines.append(earnings)
+    if time_note:
+        optional_lines.append(time_note)
+
+    tier = _score_tier_label(score)
+    ai_footer = _ai_footer(signal)
+
+    lines = [
+        f"{urgency} \u2014 {ticker} CSP  [{sig_time}]",
+        f"${strike:.2f}P {expiry} \u00b7 {dte}DTE \u00b7 ${premium:.2f} \u00b7 {ann:.0f}% ann \u00b7 \u0394{delta:.2f}",
+        f"${price:.2f} {from_open_arrow}{abs(change_from_open):.1f}% from open \u00b7 {pdl_str} \u00b7 {vol_chip}",
+        f"RSI {rsi_str} \u00b7 IVR {ivr_str} \u00b7 IV {iv_str} \u00b7 VIX {vix_str}",
+        ta_line,
+    ]
+    lines.extend(optional_lines)
+    lines.append("\u2500" * 23)
+    lines.append(
+        f"SELL TO OPEN 1x {ticker} {expiry} ${strike:.2f}P \u00b7 "
+        f"Score: {score}/10 {tier}{ai_footer}"
     )
+    return "\n".join(lines)
 
 
 def format_cc_alert(signal: dict) -> str:
-    """Format a CC signal into a Telegram message with full Phase 2B data."""
-    direction = "\u2191" if signal["change_pct"] > 0 else "\u2193"
-    pnl_if_called = signal.get("pnl_if_called", 0)
-    pnl_sign = "+" if pnl_if_called >= 0 else "-"
+    """Format a CC signal into a compact 9-line Telegram message.
+
+    Same layout as CSP but with call strike, cost basis, conviction mode,
+    and SELL/BUY BACK based on trade side.
+    """
+    ticker = signal["ticker"]
+    score = signal.get("score") or 0
+    urgency = _urgency_emoji(score)
+    sig_time = signal.get("signal_time") or datetime.now(ET).strftime("%H:%M ET")
+
+    strike = signal["strike"]
+    expiry = signal["expiry"]
+    dte = signal["dte"]
+    premium = signal["premium"]
+    ann = signal.get("annualized_roi", signal.get("annualized_yield", 0))
+    delta = signal.get("delta", 0)
+
+    price = signal["price"]
+    change_from_open = signal.get("change_from_open_pct", signal.get("change_pct", 0))
+    from_open_arrow = "\u2191" if change_from_open >= 0 else "\u2193"
+    pdh_pct = _pct_from_pdh(signal)
+    pdh_str = f"{pdh_pct:+.1f}% from PDH" if pdh_pct is not None else "PDH N/A"
+    vol_chip = _vol_chip(signal)
+
+    cost_basis = signal.get("cost_basis", 0)
+    conviction = signal.get("conviction", "medium")
+    mode_label = {
+        "aggressive_exit": "AGG EXIT",
+        "exit_efficient": "EXIT EFF",
+        "medium": "STANDARD",
+        "high": "CONSERV",
+    }.get(conviction, conviction.upper())
+
+    rsi_val = signal.get("rsi_14")
+    rsi_str = f"{rsi_val:.0f}" if rsi_val is not None else "N/A"
+    ivr_str = f"{signal['ivr']:.0f}"
+    iv_str = f"{signal['iv']:.0f}%"
+    vix_val = signal.get("vix_level")
+    vix_str = f"{vix_val:.0f}" if vix_val is not None else "N/A"
+
+    ta_flags = _top_ta_flags(signal, limit=2)
+    ta_line = " \u00b7 ".join(ta_flags) if ta_flags else "\u2014 no TA flags"
+
+    thesis = signal.get("ai_thesis")
+    thesis_line = f"\U0001f9e0 {thesis}" if thesis else ""
+
+    earnings = _earnings_compact(signal)
+    time_note = signal.get("time_note")
+
+    optional_lines = []
+    if thesis_line:
+        optional_lines.append(thesis_line)
+    if earnings:
+        optional_lines.append(earnings)
+    if time_note:
+        optional_lines.append(time_note)
+
+    tier = _score_tier_label(score)
+    ai_footer = _ai_footer(signal)
+
     contracts = signal.get("shares", 100) // 100
+    action_verb = "SELL TO OPEN"
 
-    vix_note = f"\n{signal['vix_note']}" if signal.get("vix_note") else ""
-
-    # Build key levels + tags section
-    key_levels = _cc_key_levels_block(signal)
-    tags = _tags_block(signal.get("tags", []))
-    levels_section = ""
-    if key_levels or tags:
-        parts = [p for p in [key_levels, tags] if p]
-        levels_section = f"\n".join(parts) + "\n"
-
-    return (
-        f"\U0001f7e2 CC SIGNAL \u2014 {signal['ticker']}\n"
-        f"{SEP}\n"
-        f"Price: ${signal['price']:.2f} ({direction} {abs(signal['change_pct']):.1f}%) "
-        f"\U0001f7e2 Green day \u2705\n"
-        f"Cost basis: ${signal['cost_basis']:.2f} | "
-        f"P&L if called: {pnl_sign}${abs(pnl_if_called):,.2f}\n"
-        f"RSI: {_rsi_label(signal['rsi_14'])} | IVR: {signal['ivr']:.0f} | IV: {signal['iv']:.0f}%\n"
-        f"Trend: {_macd_label(signal['macd_trend'])} | {_vix_line(signal)}{vix_note}\n"
-        f"{_bb_line(signal)}\n"
-        f"{_vwap_line(signal)}\n"
-        f"20MA: ${signal['ma_20']:.2f} | 50MA: ${signal['ma_50']:.2f}\n"
-        f"{SEP}\n"
-        f"{levels_section}"
-        f"{SEP}\n"
-        f"Setup: {signal['expiry']} ${signal['strike']:.2f}C (DTE: {signal['dte']})\n"
-        f"Delta: {signal['delta']:.2f} | Premium: ${signal['premium']:.2f}\n"
-        f"Yield: {signal.get('cycle_roi', signal['yield_pct']):.1f}% / {signal['dte']} days | "
-        f"Ann: ~{signal.get('annualized_roi', signal['annualized_yield']):.0f}% "
-        f"{signal.get('yield_flag', '')}\n"
-        f"{_strike_vs_basis_line(signal)}\n"
-        f"{SEP}\n"
-        f"{_earnings_line(signal)}\n"
-        f"Action: SELL TO OPEN {contracts}x {signal['ticker']} {signal['expiry']} ${signal['strike']:.2f}C"
-        f"{_score_line(signal)}"
+    lines = [
+        f"{urgency} \u2014 {ticker} CC  [{sig_time}]",
+        f"${strike:.2f}C {expiry} \u00b7 {dte}DTE \u00b7 ${premium:.2f} \u00b7 {ann:.0f}% ann \u00b7 \u0394{delta:.2f}",
+        f"${price:.2f} {from_open_arrow}{abs(change_from_open):.1f}% from open \u00b7 {pdh_str} \u00b7 {vol_chip}",
+        f"Basis ${cost_basis:.2f} \u00b7 {mode_label} mode \u00b7 RSI {rsi_str} \u00b7 IVR {ivr_str} \u00b7 IV {iv_str} \u00b7 VIX {vix_str}",
+        ta_line,
+    ]
+    lines.extend(optional_lines)
+    lines.append("\u2500" * 23)
+    lines.append(
+        f"{action_verb} {contracts}x {ticker} {expiry} ${strike:.2f}C \u00b7 "
+        f"Score: {score}/10 {tier}{ai_footer}"
     )
+    return "\n".join(lines)
 
 
 def format_close_alert(signal: dict, monthly_total: float = 0, monthly_target: int = 3500) -> str:

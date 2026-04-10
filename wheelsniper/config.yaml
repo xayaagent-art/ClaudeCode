@@ -41,11 +41,11 @@ signal_params:
   # Minimum premium yield for CSP signals (%)
   min_yield_pct: 1.5
 
-# Alert deduplication window in hours
-alert_dedup_hours: 4
+# Alert deduplication / cooling window in hours (same ticker/type won't re-alert)
+alert_dedup_hours: 1.5
 
 # Polling interval in minutes during market hours
-poll_interval_minutes: 5
+poll_interval_minutes: 1
 
 # Market hours (Eastern Time)
 market_hours:

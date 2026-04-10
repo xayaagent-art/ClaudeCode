@@ -176,6 +176,10 @@ def get_market_data(ticker: str) -> Optional[dict]:
         prev_close = float(closes.iloc[-2])
         change_pct = ((price - prev_close) / prev_close) * 100
 
+        # Intraday change from today's open (for compact signal format)
+        today_open = float(hist["Open"].iloc[-1])
+        change_from_open_pct = ((price - today_open) / today_open * 100) if today_open > 0 else 0.0
+
         # Moving averages (20-day and 50-day SMA)
         ma_20 = float(closes.tail(20).mean()) if len(closes) >= 20 else None
         ma_50 = float(closes.tail(50).mean()) if len(closes) >= 50 else None
@@ -211,7 +215,9 @@ def get_market_data(ticker: str) -> Optional[dict]:
             "ticker": ticker,
             "price": round(price, 2),
             "prev_close": round(prev_close, 2),
+            "today_open": round(today_open, 2),
             "change_pct": round(change_pct, 2),
+            "change_from_open_pct": round(change_from_open_pct, 2),
             "volume": int(hist["Volume"].iloc[-1]),
             # Moving averages
             "ma_20": round(ma_20, 2) if ma_20 else None,
@@ -409,6 +415,92 @@ def _calc_vwap(ticker: str, current_price: float) -> tuple[Optional[float], str]
     except Exception as e:
         logger.debug(f"Could not calculate VWAP for {ticker}: {e}")
         return None, "unknown"
+
+
+# Cache volume context per ticker for 2 minutes
+_volume_cache: dict = {}
+_VOLUME_CACHE_SECONDS = 120
+
+
+def get_volume_context(ticker: str) -> Optional[dict]:
+    """Compare current intraday volume to 30-day average, proportional to time of day.
+
+    Returns dict with:
+      vol_ratio: float (current_rate / avg_daily_volume)
+      classification: "low" | "normal" | "HIGH" | "SURGE"
+      display: str | None — short display label ("Vol HIGH", "Vol SURGE \u26a1")
+      score_boost: float — +0.5 if SURGE else 0.0
+
+    Returns None during pre-market / after-hours or on error.
+    """
+    global _volume_cache
+
+    now = datetime.now(ET)
+    cached = _volume_cache.get(ticker)
+    if cached and (now - cached["_cached_at"]).total_seconds() < _VOLUME_CACHE_SECONDS:
+        return {k: v for k, v in cached.items() if k != "_cached_at"}
+
+    try:
+        # Minutes elapsed since 9:30 AM ET (regular session is 390 minutes)
+        market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+        market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+
+        if now < market_open or now > market_close:
+            return None
+
+        minutes_elapsed = max((now - market_open).total_seconds() / 60.0, 1.0)
+        session_fraction = min(minutes_elapsed / 390.0, 1.0)
+
+        stock = yf.Ticker(ticker)
+
+        # Current intraday volume (today's cumulative volume)
+        intraday = stock.history(period="1d", interval="1m", prepost=False)
+        if intraday.empty:
+            return None
+        current_volume = float(intraday["Volume"].sum())
+
+        # 30-day average daily volume
+        daily = stock.history(period="1mo")
+        if daily.empty or len(daily) < 5:
+            return None
+        avg_daily_volume = float(daily["Volume"].mean())
+        if avg_daily_volume <= 0:
+            return None
+
+        # Project current rate to a full day, then compare to avg
+        current_rate = current_volume / session_fraction
+        vol_ratio = current_rate / avg_daily_volume
+
+        # Classify
+        if vol_ratio < 0.7:
+            classification = "low"
+            display = None
+            score_boost = 0.0
+        elif vol_ratio < 1.3:
+            classification = "normal"
+            display = None
+            score_boost = 0.0
+        elif vol_ratio < 2.0:
+            classification = "HIGH"
+            display = "Vol HIGH"
+            score_boost = 0.0
+        else:
+            classification = "SURGE"
+            display = "Vol SURGE \u26a1"
+            score_boost = 0.5
+
+        result = {
+            "vol_ratio": round(vol_ratio, 2),
+            "classification": classification,
+            "display": display,
+            "score_boost": score_boost,
+        }
+        _volume_cache[ticker] = {**result, "_cached_at": now}
+        return result
+
+    except Exception as e:
+        logger.debug(f"Volume context unavailable for {ticker}: {e}")
+        return None
 
 
 def get_vix() -> tuple[Optional[float], str]:
