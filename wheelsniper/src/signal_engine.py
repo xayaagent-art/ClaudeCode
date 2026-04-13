@@ -25,11 +25,13 @@ from src.earnings_filter import has_upcoming_earnings
 from src.iv_calculator import calculate_ivp_and_hv, calculate_ivr
 from src.key_levels import get_key_levels
 from src.market_data import (
+    get_intraday_position,
     get_market_data,
     get_options_chain,
     get_premarket_data,
     get_vix,
     get_volume_context,
+    near_key_level,
 )
 from src.notion_sync import get_premium_timing
 from src.sector_guard import check_sector_concentration, record_scan_sector
@@ -38,6 +40,24 @@ from src.strike_selector import calculate_yield, select_call_strike, select_put_
 from src.uoa import detect_uoa
 
 logger = logging.getLogger(__name__)
+
+# --- Price position gate (FIX 1) ---
+# CSP fires only if price_position <= 0.35 OR within 2% of key support
+# CC fires only if price_position >= 0.65 OR within 2% of key resistance
+_CSP_MAX_POSITION = 0.35
+_CC_MIN_POSITION = 0.65
+_GATE_KEY_LEVEL_THRESHOLD_PCT = 2.0
+
+# --- Pending signals (FIX 2) ---
+# Signals that passed scoring but failed the price gate are cached here and
+# re-checked every scan cycle. Keyed by (ticker, type) to allow both sides.
+_pending_signals: dict = {}  # key = "TICKER_CSP" / "TICKER_CC" -> {signal, queued_at}
+_PENDING_SIGNAL_MAX_AGE_MINUTES = 60
+
+# --- Support/resistance proximity alerts (FIX 3) ---
+# Separate early-warning alerts — fired before full signal criteria are met.
+_PROXIMITY_THRESHOLD_PCT = 1.5
+_PROXIMITY_IVR_MIN = 30
 
 
 def load_config() -> dict:
@@ -101,6 +121,152 @@ def _apply_phase5_enrichment(signal: dict, sig_type: str) -> dict:
                 adjustment += uoa.get("score_adjustment_cc", 0.0)
 
     return {"adjustment": round(adjustment, 2), "flags": flags}
+
+
+def _pending_key(ticker: str, sig_type: str) -> str:
+    return f"{ticker}_{sig_type}"
+
+
+def _build_gate_levels_dict(signal: dict) -> dict:
+    """Flatten key-level fields from a signal into the shape near_key_level expects."""
+    levels = dict(signal.get("levels") or {})
+    # Pull MAs and BB from the top-level signal body as well
+    levels.setdefault("ma_20", signal.get("ma_20"))
+    levels.setdefault("ma_50", signal.get("ma_50"))
+    levels.setdefault("bb_upper", signal.get("bb_upper"))
+    levels.setdefault("bb_lower", signal.get("bb_lower"))
+    return levels
+
+
+def _check_price_gate(signal: dict, sig_type: str) -> dict:
+    """Run the intraday price position gate on a qualified signal.
+
+    Returns dict with:
+      passed: bool              — signal is allowed to fire now
+      reason: str               — "position" | "near_support" | "near_resistance"
+                                  | "gated_top_of_range" | "gated_bottom_of_range"
+                                  | "no_intraday_data"
+      price_position: float | None
+      key_level: dict | None    — {name, level, distance_pct} if near support/resistance
+    """
+    ticker = signal.get("ticker", "")
+    intraday = get_intraday_position(ticker)
+
+    if not intraday:
+        # Fail-open: if we can't fetch intraday (early market / premarket / error),
+        # let the signal through so we don't silence everything.
+        return {
+            "passed": True,
+            "reason": "no_intraday_data",
+            "price_position": None,
+            "key_level": None,
+        }
+
+    pp = intraday["price_position"]
+    signal["price_position"] = pp
+    signal["day_high"] = intraday["day_high"]
+    signal["day_low"] = intraday["day_low"]
+
+    price = signal.get("price") or intraday.get("current") or 0
+    level_dict = _build_gate_levels_dict(signal)
+
+    if sig_type == "CSP":
+        if pp <= _CSP_MAX_POSITION:
+            return {"passed": True, "reason": "position", "price_position": pp, "key_level": None}
+        kl = near_key_level(price, level_dict, "support", _GATE_KEY_LEVEL_THRESHOLD_PCT)
+        if kl:
+            return {"passed": True, "reason": "near_support", "price_position": pp, "key_level": kl}
+        return {
+            "passed": False,
+            "reason": "gated_top_of_range",
+            "price_position": pp,
+            "key_level": None,
+        }
+    else:  # CC
+        if pp >= _CC_MIN_POSITION:
+            return {"passed": True, "reason": "position", "price_position": pp, "key_level": None}
+        kl = near_key_level(price, level_dict, "resistance", _GATE_KEY_LEVEL_THRESHOLD_PCT)
+        if kl:
+            return {"passed": True, "reason": "near_resistance", "price_position": pp, "key_level": kl}
+        return {
+            "passed": False,
+            "reason": "gated_bottom_of_range",
+            "price_position": pp,
+            "key_level": None,
+        }
+
+
+def _queue_pending_signal(signal: dict, sig_type: str, gate: dict):
+    """Cache a gated signal for re-check on the next scan cycle."""
+    ticker = signal.get("ticker", "")
+    key = _pending_key(ticker, sig_type)
+    _pending_signals[key] = {
+        "signal": signal,
+        "sig_type": sig_type,
+        "queued_at": datetime.now(ET),
+        "last_position": gate.get("price_position"),
+    }
+    pp = gate.get("price_position")
+    pp_str = f"{pp * 100:.0f}%" if pp is not None else "N/A"
+    logger.info(
+        f"[SKIPPED] {ticker} {sig_type} — price at {pp_str} of range, "
+        f"not near {'low' if sig_type == 'CSP' else 'high'}. Will re-check."
+    )
+
+
+def drain_pending_signals(sig_type: Optional[str] = None) -> list[dict]:
+    """Re-check pending signals and return any that now pass the price gate.
+
+    Args:
+      sig_type: Filter to only drain signals of this type ("CSP" or "CC").
+                If None, processes all pending signals.
+
+    Called once per scan cycle per type. Expired signals (>60 min) are
+    discarded. Signals that now qualify are removed from the pending dict
+    and returned as fully-formed signal dicts ready to be alerted.
+    """
+    now = datetime.now(ET)
+    fired = []
+    expired_keys = []
+
+    for key, entry in list(_pending_signals.items()):
+        if sig_type is not None and entry["sig_type"] != sig_type:
+            continue
+
+        age_min = (now - entry["queued_at"]).total_seconds() / 60
+        if age_min > _PENDING_SIGNAL_MAX_AGE_MINUTES:
+            expired_keys.append(key)
+            continue
+
+        signal = entry["signal"]
+        entry_type = entry["sig_type"]
+        gate = _check_price_gate(signal, entry_type)
+        if gate["passed"]:
+            # Annotate the re-fire reason so the alert can show why it fired late
+            signal["gate_reason"] = gate["reason"]
+            signal["gated_wait_minutes"] = round(age_min, 1)
+            fired.append(signal)
+            logger.info(
+                f"[RE-FIRE] {signal.get('ticker')} {entry_type} — "
+                f"position now {gate['price_position']:.0%}, waited {age_min:.0f}m"
+            )
+        else:
+            # Still gated, keep it
+            entry["last_position"] = gate.get("price_position")
+
+    # Apply updates
+    for key in expired_keys:
+        _pending_signals.pop(key, None)
+        logger.info(f"[EXPIRED] {key} — pending signal aged out after 60m")
+    for signal in fired:
+        _pending_signals.pop(_pending_key(signal["ticker"], signal["type"]), None)
+
+    return fired
+
+
+def clear_pending_signals():
+    """Utility for tests / manual reset."""
+    _pending_signals.clear()
 
 
 def _get_vix_note(vix_level: Optional[float], vix_env: str) -> Optional[str]:
@@ -317,11 +483,21 @@ def scan_csp_signals(config: dict = None) -> list[dict]:
 
     Each signal is scored 1-10. Score data is attached to the signal dict.
     Sector guard: max 1 CSP per sector per scan, suppress if 3+ open in sector.
+
+    Applies the price-position gate (FIX 1/2): signals whose underlying is
+    NOT in the bottom 35% of today's intraday range AND not within 2% of a
+    key support level are queued in _pending_signals instead of being
+    returned. Any previously-queued CSP signals that now qualify are
+    re-fired and returned alongside fresh signals.
     """
     config = config or load_config()
     params = config["signal_params"]
     signals = []
     scan_sectors = {}  # Track sectors signaled this scan cycle
+
+    # FIX 2: drain any pending CSP signals that now qualify
+    for refire in drain_pending_signals("CSP"):
+        signals.append(refire)
 
     for ticker in config["watchlist"]:
         # Sector concentration check before full evaluation
@@ -366,6 +542,19 @@ def scan_csp_signals(config: dict = None) -> list[dict]:
             if ta["suppress"]:
                 signal["should_alert"] = False
 
+            # FIX 1: Price position gate — signals still marked for alert
+            # only fire when stock is in bottom 35% of today's range OR
+            # within 2% of key support. Gated signals are queued for re-check.
+            if signal.get("should_alert", True):
+                gate = _check_price_gate(signal, "CSP")
+                signal["price_position"] = gate.get("price_position")
+                signal["gate_reason"] = gate["reason"]
+                signal["gate_key_level"] = gate.get("key_level")
+                if not gate["passed"]:
+                    _queue_pending_signal(signal, "CSP", gate)
+                    record_scan_sector(scan_sectors, ticker)
+                    continue
+
             signals.append(signal)
             record_scan_sector(scan_sectors, ticker)
 
@@ -376,11 +565,19 @@ def scan_cc_signals(config: dict = None) -> list[dict]:
     """Scan assigned positions for Covered Call entry signals.
 
     Each signal is scored 1-10. Score data is attached to the signal dict.
+
+    Applies the price-position gate (FIX 1/2): CC signals only fire when
+    the stock is in the top 35% of today's intraday range OR within 2%
+    of a key resistance level. Gated signals are queued.
     """
     config = config or load_config()
     params = config["signal_params"]
     positions = config.get("positions", {}) or {}
     signals = []
+
+    # FIX 2: drain any pending CC signals that now qualify
+    for refire in drain_pending_signals("CC"):
+        signals.append(refire)
 
     for ticker, pos in positions.items():
         if not pos or pos.get("shares", 0) < 100:
@@ -431,6 +628,17 @@ def scan_cc_signals(config: dict = None) -> list[dict]:
             except Exception:
                 pass
 
+            # FIX 1: Price position gate — CC only fires in top 35% of range
+            # or within 2% of key resistance. Gated signals are queued for re-check.
+            if signal.get("should_alert", True):
+                gate = _check_price_gate(signal, "CC")
+                signal["price_position"] = gate.get("price_position")
+                signal["gate_reason"] = gate["reason"]
+                signal["gate_key_level"] = gate.get("key_level")
+                if not gate["passed"]:
+                    _queue_pending_signal(signal, "CC", gate)
+                    continue
+
             signals.append(signal)
 
     return signals
@@ -450,6 +658,111 @@ def scan_close_signals(config: dict = None) -> list[dict]:
             signals.append(signal)
 
     return signals
+
+
+def scan_proximity_alerts(config: dict = None) -> list[dict]:
+    """Scan watchlist + owned positions for early-warning support/resistance touches.
+
+    FIX 3: These alerts fire BEFORE a full CSP/CC signal qualifies, giving
+    early notice when price first approaches a key level. Gates:
+
+      - Price within 1.5% of a key level
+      - IVR >= 30 (no point flagging low-IV setups)
+      - Ticker-level 2h dedup handled by the caller via alert_manager
+
+    Returns a list of dicts ready for format_proximity_alert():
+      {
+        kind: "support" | "resistance",
+        ticker: str,
+        price: float,
+        level_name: str,
+        level: float,
+        distance_pct: float,
+        iv: float,
+        ivr: float,
+        rsi_14: float | None,
+        signal_time: str,
+      }
+    """
+    config = config or load_config()
+    watchlist = list(config.get("watchlist", []) or [])
+    positions = config.get("positions", {}) or {}
+
+    # Support touches: scan watchlist (CSP candidates)
+    # Resistance touches: scan owned positions (CC candidates)
+    support_tickers = set(watchlist)
+    resist_tickers = {
+        t for t, p in positions.items()
+        if p and p.get("shares", 0) >= 100
+    }
+
+    now_str = datetime.now(ET).strftime("%H:%M ET")
+    alerts = []
+
+    for ticker in sorted(support_tickers | resist_tickers):
+        try:
+            ivr_data = calculate_ivr(ticker)
+            if not ivr_data or ivr_data["ivr"] < _PROXIMITY_IVR_MIN:
+                continue
+
+            data = get_market_data(ticker)
+            if not data:
+                continue
+
+            price = data.get("price") or 0
+            if price <= 0:
+                continue
+
+            levels = get_key_levels(
+                ticker,
+                bb_lower=data.get("bb_lower"),
+                bb_upper=data.get("bb_upper"),
+                ma_20=data.get("ma_20"),
+                ma_50=data.get("ma_50"),
+            ) or {}
+            # Merge MA/BB into the level dict so near_key_level can see them
+            level_dict = dict(levels)
+            level_dict.setdefault("ma_20", data.get("ma_20"))
+            level_dict.setdefault("ma_50", data.get("ma_50"))
+            level_dict.setdefault("bb_upper", data.get("bb_upper"))
+            level_dict.setdefault("bb_lower", data.get("bb_lower"))
+
+            if ticker in support_tickers:
+                kl = near_key_level(price, level_dict, "support", _PROXIMITY_THRESHOLD_PCT)
+                if kl:
+                    alerts.append({
+                        "kind": "support",
+                        "ticker": ticker,
+                        "price": round(price, 2),
+                        "level_name": kl["name"],
+                        "level": kl["level"],
+                        "distance_pct": kl["distance_pct"],
+                        "iv": ivr_data.get("current_iv"),
+                        "ivr": ivr_data["ivr"],
+                        "rsi_14": data.get("rsi_14"),
+                        "signal_time": now_str,
+                    })
+
+            if ticker in resist_tickers:
+                kl = near_key_level(price, level_dict, "resistance", _PROXIMITY_THRESHOLD_PCT)
+                if kl:
+                    alerts.append({
+                        "kind": "resistance",
+                        "ticker": ticker,
+                        "price": round(price, 2),
+                        "level_name": kl["name"],
+                        "level": kl["level"],
+                        "distance_pct": kl["distance_pct"],
+                        "iv": ivr_data.get("current_iv"),
+                        "ivr": ivr_data["ivr"],
+                        "rsi_14": data.get("rsi_14"),
+                        "signal_time": now_str,
+                    })
+
+        except Exception as e:
+            logger.debug(f"Proximity scan error for {ticker}: {e}")
+
+    return alerts
 
 
 def evaluate_csp(ticker: str, params: dict) -> Optional[dict]:

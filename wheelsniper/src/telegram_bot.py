@@ -296,6 +296,57 @@ def _earnings_compact(signal: dict) -> Optional[str]:
     return None
 
 
+def _price_position_chip(signal: dict) -> Optional[str]:
+    """Short 'At X% of range' chip for line 3 of the compact format.
+
+    Returns None if intraday position data isn't available for this signal.
+    """
+    pp = signal.get("price_position")
+    if pp is None:
+        return None
+    return f"At {pp * 100:.0f}% of range"
+
+
+def format_proximity_alert(alert: dict) -> str:
+    """Format an early-warning support/resistance touch alert.
+
+    Layout:
+      📍 SUPPORT TOUCH — TICKER HH:MM ET
+      Price $X touching LEVEL_NAME $Y
+      IV X% | IVR X | RSI X
+      👀 Watch for CSP entry if holds above support
+    """
+    kind = alert.get("kind", "support")
+    ticker = alert.get("ticker", "")
+    price = alert.get("price") or 0
+    level_name = alert.get("level_name", "level")
+    level = alert.get("level") or 0
+    iv = alert.get("iv")
+    ivr = alert.get("ivr")
+    rsi = alert.get("rsi_14")
+    sig_time = alert.get("signal_time") or datetime.now(ET).strftime("%H:%M ET")
+
+    iv_str = f"{iv:.0f}%" if iv is not None else "N/A"
+    ivr_str = f"{ivr:.0f}" if ivr is not None else "N/A"
+    rsi_str = f"{rsi:.0f}" if rsi is not None else "N/A"
+
+    if kind == "support":
+        header = f"\U0001f4cd SUPPORT TOUCH \u2014 {ticker} {sig_time}"
+        verb = "touching"
+        watch = "\U0001f440 Watch for CSP entry if holds above support"
+    else:
+        header = f"\U0001f4cd RESISTANCE TOUCH \u2014 {ticker} {sig_time}"
+        verb = "at"
+        watch = "\U0001f440 Watch for CC entry if price stalls here"
+
+    return (
+        f"{header}\n"
+        f"Price ${price:.2f} {verb} {level_name} ${level:.2f}\n"
+        f"IV {iv_str} | IVR {ivr_str} | RSI {rsi_str}\n"
+        f"{watch}"
+    )
+
+
 def _tags_block(tags: list) -> str:
     """Format signal tags as a block."""
     if not tags:
@@ -335,6 +386,8 @@ def format_csp_alert(signal: dict) -> str:
     pdl_pct = _pct_from_pdl(signal)
     pdl_str = f"{pdl_pct:+.1f}% from PDL" if pdl_pct is not None else "PDL N/A"
     vol_chip = _vol_chip(signal)
+    pp_chip = _price_position_chip(signal)
+    pp_segment = f" \u00b7 {pp_chip}" if pp_chip else ""
 
     rsi_val = signal.get("rsi_14")
     rsi_str = f"{rsi_val:.0f}" if rsi_val is not None else "N/A"
@@ -369,7 +422,7 @@ def format_csp_alert(signal: dict) -> str:
     lines = [
         f"{urgency} \u2014 {ticker} CSP  [{sig_time}]",
         f"${strike:.2f}P {expiry} \u00b7 {dte}DTE \u00b7 ${premium:.2f} \u00b7 {ann:.0f}% ann \u00b7 \u0394{delta:.2f}",
-        f"${price:.2f} {from_open_arrow}{abs(change_from_open):.1f}% from open \u00b7 {pdl_str} \u00b7 {vol_chip}",
+        f"${price:.2f} {from_open_arrow}{abs(change_from_open):.1f}% from open \u00b7 {pdl_str}{pp_segment} \u00b7 {vol_chip}",
         f"RSI {rsi_str} \u00b7 IVR {ivr_str}{ivp_str} \u00b7 IV {iv_str} \u00b7 VIX {vix_str}",
         ta_line,
     ]
@@ -406,6 +459,8 @@ def format_cc_alert(signal: dict) -> str:
     pdh_pct = _pct_from_pdh(signal)
     pdh_str = f"{pdh_pct:+.1f}% from PDH" if pdh_pct is not None else "PDH N/A"
     vol_chip = _vol_chip(signal)
+    pp_chip = _price_position_chip(signal)
+    pp_segment = f" \u00b7 {pp_chip}" if pp_chip else ""
 
     cost_basis = signal.get("cost_basis", 0)
     conviction = signal.get("conviction", "medium")
@@ -451,7 +506,7 @@ def format_cc_alert(signal: dict) -> str:
     lines = [
         f"{urgency} \u2014 {ticker} CC  [{sig_time}]",
         f"${strike:.2f}C {expiry} \u00b7 {dte}DTE \u00b7 ${premium:.2f} \u00b7 {ann:.0f}% ann \u00b7 \u0394{delta:.2f}",
-        f"${price:.2f} {from_open_arrow}{abs(change_from_open):.1f}% from open \u00b7 {pdh_str} \u00b7 {vol_chip}",
+        f"${price:.2f} {from_open_arrow}{abs(change_from_open):.1f}% from open \u00b7 {pdh_str}{pp_segment} \u00b7 {vol_chip}",
         f"Basis ${cost_basis:.2f} \u00b7 {mode_label} mode \u00b7 RSI {rsi_str} \u00b7 IVR {ivr_str}{ivp_str} \u00b7 IV {iv_str} \u00b7 VIX {vix_str}",
         ta_line,
     ]
