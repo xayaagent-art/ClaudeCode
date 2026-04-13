@@ -23,14 +23,25 @@ from src.market_data import get_premarket_data, get_stock_snapshot, get_vix
 from src.morning_brief import build_morning_brief
 from src.notion_sync import log_signal_to_notion, track_intraday_premium, track_position_targets
 from src.position_tracker import get_monthly_summary
-from src.signal_engine import scan_cc_signals, scan_close_signals, scan_csp_signals
+from src.signal_engine import (
+    scan_cc_signals,
+    scan_close_signals,
+    scan_csp_signals,
+    scan_proximity_alerts,
+)
 from src.telegram_bot import (
     format_cc_alert,
     format_close_alert,
     format_csp_alert,
     format_premarket_alert,
+    format_proximity_alert,
     send_alert,
 )
+from src.uoa import detect_uoa, format_uoa_alert
+from src.weekly_summary import build_weekly_summary
+
+# Seconds to wait between multiple alerts in a single scan cycle (FIX 4)
+_ALERT_STAGGER_SECONDS = 5
 
 logger = logging.getLogger(__name__)
 ET = pytz.timezone("America/New_York")
@@ -112,6 +123,9 @@ async def run_scan():
       10:30-15:30  movers_only (only tickers with >1% move since last scan)
       15:30-15:55  full
       other        idle (scheduler should not fire outside hours anyway)
+
+    All outgoing alerts are collected and then sent with a 5-second stagger
+    (FIX 4) so a cluster of signals doesn't spam Telegram in one burst.
     """
     config = load_config()
     dedup_hours = config.get("alert_dedup_hours", 1.5)
@@ -139,7 +153,7 @@ async def run_scan():
 
     if not active_csp and not active_cc:
         logger.info("No active tickers this scan (smart throttle).")
-        # Still run close-signal + notion tracking below
+        # Still run close-signal + proximity + notion tracking below
         csp_config = cc_config = None
     else:
         csp_config = copy.deepcopy(config)
@@ -149,60 +163,95 @@ async def run_scan():
             t: p for t, p in positions.items() if t in active_cc
         }
 
-    # CSP signals (only alert on score >= 6)
+    # Queue of (msg, ticker, alert_type, notion_signal_or_None) to fire at end
+    alert_queue: list[tuple] = []
+
+    # --- CSP signals (score >= 6, price gate applied inside scan_csp_signals) ---
     csp_iter = scan_csp_signals(csp_config) if csp_config else []
     for signal in csp_iter:
         if not signal.get("should_alert", True):
             continue
-        if should_alert(signal["ticker"], "CSP", dedup_hours):
-            thesis = generate_signal_thesis(signal)
-            if thesis:
-                signal["ai_thesis"] = thesis
-            # Apply AI confidence to score
-            ai_adj = signal.get("ai_confidence_adjustment", 0)
-            if ai_adj != 0:
-                signal["score"] = round(max(0, min(10, signal["score"] + ai_adj)), 1)
-                if signal["score"] < 6:
-                    signal["should_alert"] = False
-            if not signal["should_alert"]:
-                continue
-            msg = format_csp_alert(signal)
-            await send_alert(msg)
-            record_alert(signal["ticker"], "CSP", msg)
-            log_signal_to_notion(signal)
+        if not should_alert(signal["ticker"], "CSP", dedup_hours):
+            continue
+        thesis = generate_signal_thesis(signal)
+        if thesis:
+            signal["ai_thesis"] = thesis
+        # Apply AI confidence to score
+        ai_adj = signal.get("ai_confidence_adjustment", 0)
+        if ai_adj != 0:
+            signal["score"] = round(max(0, min(10, signal["score"] + ai_adj)), 1)
+            if signal["score"] < 6:
+                signal["should_alert"] = False
+        if not signal["should_alert"]:
+            continue
+        msg = format_csp_alert(signal)
+        alert_queue.append((msg, signal["ticker"], "CSP", signal))
 
-    # CC signals (only alert on score >= 6)
+    # --- CC signals (score >= 6, price gate applied inside scan_cc_signals) ---
     cc_iter = scan_cc_signals(cc_config) if cc_config else []
     for signal in cc_iter:
         if not signal.get("should_alert", True):
             continue
-        if should_alert(signal["ticker"], "CC", dedup_hours):
-            thesis = generate_signal_thesis(signal)
-            if thesis:
-                signal["ai_thesis"] = thesis
-            # Apply AI confidence to score
-            ai_adj = signal.get("ai_confidence_adjustment", 0)
-            if ai_adj != 0:
-                signal["score"] = round(max(0, min(10, signal["score"] + ai_adj)), 1)
-                if signal["score"] < 6:
-                    signal["should_alert"] = False
-            if not signal["should_alert"]:
-                continue
-            msg = format_cc_alert(signal)
-            await send_alert(msg)
-            record_alert(signal["ticker"], "CC", msg)
-            log_signal_to_notion(signal)
+        if not should_alert(signal["ticker"], "CC", dedup_hours):
+            continue
+        thesis = generate_signal_thesis(signal)
+        if thesis:
+            signal["ai_thesis"] = thesis
+        ai_adj = signal.get("ai_confidence_adjustment", 0)
+        if ai_adj != 0:
+            signal["score"] = round(max(0, min(10, signal["score"] + ai_adj)), 1)
+            if signal["score"] < 6:
+                signal["should_alert"] = False
+        if not signal["should_alert"]:
+            continue
+        msg = format_cc_alert(signal)
+        alert_queue.append((msg, signal["ticker"], "CC", signal))
 
-    # Close signals
+    # --- FIX 3: Support/Resistance proximity alerts (early warning) ---
+    try:
+        for prox in scan_proximity_alerts(config):
+            alert_type = (
+                "SUPPORT_TOUCH" if prox["kind"] == "support" else "RESISTANCE_TOUCH"
+            )
+            # 2-hour dedup per ticker per alert type
+            if not should_alert(prox["ticker"], alert_type, dedup_hours=2):
+                continue
+            msg = format_proximity_alert(prox)
+            alert_queue.append((msg, prox["ticker"], alert_type, None))
+    except Exception as e:
+        logger.debug(f"Proximity scan error: {e}")
+
+    # --- Close signals ---
     for signal in scan_close_signals(config):
         if should_alert(signal["ticker"], "CLOSE", dedup_hours):
             summary = get_monthly_summary()
             target = config["monthly_target"]["low"]
             msg = format_close_alert(signal, summary["total_income"], target)
-            await send_alert(msg)
-            record_alert(signal["ticker"], "CLOSE", msg)
+            alert_queue.append((msg, signal["ticker"], "CLOSE", None))
 
-    # Notion position tracking (close targets + intraday premium)
+    # --- Fire queued alerts with stagger (FIX 4) ---
+    for i, (msg, ticker, alert_type, notion_signal) in enumerate(alert_queue):
+        if i > 0:
+            await asyncio.sleep(_ALERT_STAGGER_SECONDS)
+        await send_alert(msg)
+        record_alert(ticker, alert_type, msg)
+        if notion_signal is not None and alert_type in ("CSP", "CC"):
+            log_signal_to_notion(notion_signal)
+
+    logger.info(
+        f"Scan alerts fired: {len(alert_queue)} "
+        f"({sum(1 for a in alert_queue if a[2] in ('CSP', 'CC'))} signals, "
+        f"{sum(1 for a in alert_queue if a[2] in ('SUPPORT_TOUCH', 'RESISTANCE_TOUCH'))} proximity, "
+        f"{sum(1 for a in alert_queue if a[2] == 'CLOSE')} close)"
+    )
+
+    # --- Standalone UOA alerts (once per ticker per day, own stagger inside) ---
+    try:
+        await scan_standalone_uoa(config)
+    except Exception as e:
+        logger.debug(f"Standalone UOA scan error: {e}")
+
+    # --- Notion position tracking (close targets + intraday premium) ---
     try:
         await track_position_targets(send_alert_fn=send_alert)
         await track_intraday_premium(send_alert_fn=send_alert)
@@ -210,6 +259,42 @@ async def run_scan():
         logger.debug(f"Notion tracking error: {e}")
 
     logger.info("Scan complete.")
+
+
+async def scan_standalone_uoa(config: dict):
+    """Fire standalone UOA alerts for watchlist tickers (once per day per ticker).
+
+    Runs cheap — only triggers heavy option-chain fetching for tickers that
+    show unusual activity via the yfinance 3-expiration sum. Uses a 24h
+    should_alert dedup so each ticker fires at most once per day.
+    """
+    watchlist = config.get("watchlist", []) or []
+    positions = config.get("positions", {}) or {}
+    # Also cover tickers we own (CC-eligible)
+    tickers = set(watchlist)
+    for t, p in positions.items():
+        if p and p.get("shares", 0) >= 100:
+            tickers.add(t)
+
+    for ticker in sorted(tickers):
+        try:
+            uoa = detect_uoa(ticker)
+            if not uoa or not uoa.get("unusual") or not uoa.get("direction"):
+                continue
+            # Once per ticker per day (24h dedup)
+            if not should_alert(ticker, "UOA", 24):
+                continue
+            snap = get_stock_snapshot(ticker)
+            price = snap.get("price") if snap else None
+            msg = format_uoa_alert(ticker, uoa, price)
+            await send_alert(msg)
+            record_alert(ticker, "UOA", msg)
+            logger.info(
+                f"UOA alert fired for {ticker}: {uoa['direction']} "
+                f"{uoa['volume_ratio']:.1f}x"
+            )
+        except Exception as e:
+            logger.debug(f"scan_standalone_uoa {ticker} error: {e}")
 
 
 async def run_premarket_scan():
@@ -277,6 +362,17 @@ async def run_daily_cleanup():
     """Clean up old alert history."""
     cleanup_old_alerts(days=30)
     logger.info("Old alerts cleaned up.")
+
+
+async def run_weekly_summary():
+    """Build and send the weekly P&L + signal-stats summary."""
+    logger.info("Building weekly summary...")
+    try:
+        msg = build_weekly_summary()
+        await send_alert(msg)
+        logger.info("Weekly summary sent.")
+    except Exception as e:
+        logger.error(f"Weekly summary failed: {e}")
 
 
 def is_market_day() -> bool:
@@ -348,8 +444,18 @@ def create_scheduler() -> AsyncIOScheduler:
         misfire_grace_time=600,
     )
 
+    # Weekly summary at 4:05 PM ET on Fridays
+    scheduler.add_job(
+        run_weekly_summary,
+        CronTrigger(hour=16, minute=5, day_of_week="fri", timezone=ET),
+        id="weekly_summary",
+        name="Weekly Summary",
+        misfire_grace_time=1800,
+    )
+
     logger.info(
         f"Scheduler configured: pre-market at 8:00 ET, brief at {brief_time} ET, "
-        f"scans every {interval}min {open_time}-{close_time} ET"
+        f"scans every {interval}min {open_time}-{close_time} ET, "
+        f"weekly summary Fri 16:05 ET"
     )
     return scheduler

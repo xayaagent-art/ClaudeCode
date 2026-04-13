@@ -421,6 +421,125 @@ def _calc_vwap(ticker: str, current_price: float) -> tuple[Optional[float], str]
 _volume_cache: dict = {}
 _VOLUME_CACHE_SECONDS = 120
 
+# Cache intraday position per ticker for 30 seconds (fresh enough for 1-min scan)
+_intraday_pos_cache: dict = {}
+_INTRADAY_POS_CACHE_SECONDS = 30
+
+
+def get_intraday_position(ticker: str) -> Optional[dict]:
+    """Compute the stock's position within today's intraday range.
+
+    Pulls 1-day 1-minute regular-session bars from yfinance, computes
+    the high/low/current, then returns:
+
+      price_position: float 0.0-1.0   (0 = at day low, 1 = at day high)
+      day_high: float
+      day_low: float
+      day_range: float                (absolute $)
+      range_pct: float                (day_range / day_low * 100)
+      current: float
+      bars: int                       (number of 1-min bars used)
+
+    Returns None if regular session hasn't started yet, if there's no
+    meaningful range (<0.01), or on fetch error. Cached for 30 seconds.
+    """
+    global _intraday_pos_cache
+
+    now = datetime.now(ET)
+    cached = _intraday_pos_cache.get(ticker)
+    if cached and (now - cached["_cached_at"]).total_seconds() < _INTRADAY_POS_CACHE_SECONDS:
+        return {k: v for k, v in cached.items() if k != "_cached_at"}
+
+    try:
+        stock = yf.Ticker(ticker)
+        # 1-day 1-min regular session
+        intraday = stock.history(period="1d", interval="1m", prepost=False)
+        if intraday.empty or len(intraday) < 2:
+            return None
+
+        day_high = float(intraday["High"].max())
+        day_low = float(intraday["Low"].min())
+        current = float(intraday["Close"].iloc[-1])
+        day_range = day_high - day_low
+
+        if day_range < 0.01:
+            # Degenerate range — treat as middle to avoid div/0 and gating chaos
+            price_position = 0.5
+            range_pct = 0.0
+        else:
+            price_position = (current - day_low) / day_range
+            price_position = max(0.0, min(1.0, price_position))
+            range_pct = round(day_range / day_low * 100, 2) if day_low > 0 else 0.0
+
+        result = {
+            "price_position": round(price_position, 3),
+            "day_high": round(day_high, 2),
+            "day_low": round(day_low, 2),
+            "day_range": round(day_range, 2),
+            "range_pct": range_pct,
+            "current": round(current, 2),
+            "bars": int(len(intraday)),
+        }
+        _intraday_pos_cache[ticker] = {**result, "_cached_at": now}
+        return result
+
+    except Exception as e:
+        logger.debug(f"Intraday position unavailable for {ticker}: {e}")
+        return None
+
+
+def near_key_level(
+    price: float,
+    levels: dict,
+    side: str,
+    threshold_pct: float = 2.0,
+) -> Optional[dict]:
+    """Check if `price` is within `threshold_pct` of a key support/resistance.
+
+    Args:
+      price: current price
+      levels: dict returned by get_key_levels() (or subset with pdl/pwl/monthly_low/
+              ma_20/ma_50/pdh/pwh/bb_upper)
+      side: "support" or "resistance"
+      threshold_pct: distance threshold as a percentage of price
+
+    Returns dict with {name: str, level: float, distance_pct: float} for the
+    closest matching level, or None if nothing qualifies or price <= 0.
+    """
+    if not levels or price <= 0:
+        return None
+
+    if side == "support":
+        candidates = [
+            ("PDL", levels.get("pdl")),
+            ("PWL", levels.get("pwl")),
+            ("Monthly low", levels.get("monthly_low")),
+            ("20MA", levels.get("ma_20")),
+            ("50MA", levels.get("ma_50")),
+        ]
+    else:
+        candidates = [
+            ("PDH", levels.get("pdh")),
+            ("PWH", levels.get("pwh")),
+            ("Monthly high", levels.get("monthly_high")),
+            ("20MA", levels.get("ma_20")),
+            ("BB upper", levels.get("bb_upper")),
+        ]
+
+    closest = None
+    for name, lvl in candidates:
+        if lvl is None or lvl <= 0:
+            continue
+        dist_pct = abs(price - lvl) / price * 100
+        if dist_pct <= threshold_pct:
+            if closest is None or dist_pct < closest["distance_pct"]:
+                closest = {
+                    "name": name,
+                    "level": round(float(lvl), 2),
+                    "distance_pct": round(dist_pct, 2),
+                }
+    return closest
+
 
 def get_volume_context(ticker: str) -> Optional[dict]:
     """Compare current intraday volume to 30-day average, proportional to time of day.
