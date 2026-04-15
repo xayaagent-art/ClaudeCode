@@ -24,6 +24,7 @@ from src.morning_brief import build_morning_brief
 from src.notion_sync import log_signal_to_notion, track_intraday_premium, track_position_targets
 from src.position_tracker import get_monthly_summary
 from src.signal_engine import (
+    fast_velocity_scan,
     scan_cc_signals,
     scan_close_signals,
     scan_csp_signals,
@@ -35,6 +36,7 @@ from src.telegram_bot import (
     format_csp_alert,
     format_premarket_alert,
     format_proximity_alert,
+    format_velocity_alert,
     send_alert,
 )
 from src.uoa import detect_uoa, format_uoa_alert
@@ -261,6 +263,50 @@ async def run_scan():
     logger.info("Scan complete.")
 
 
+async def run_fast_velocity_scan():
+    """Fast 30-second pre-scan for ±2.5% moves in 3 minutes.
+
+    Runs alongside the 1-minute full scan to catch sharp moves within 30
+    seconds of them starting. Tickers that trip the velocity threshold are
+    flagged for priority processing in the next full scan cycle.
+
+    Skips outside market hours (no yfinance churn when the market is closed).
+    """
+    now_et = datetime.now(ET)
+    window = _classify_scan_window(now_et)
+    if window == "idle":
+        return
+
+    try:
+        config = load_config()
+    except Exception as e:
+        logger.debug(f"Velocity scan config load error: {e}")
+        return
+
+    try:
+        alerts = fast_velocity_scan(config)
+    except Exception as e:
+        logger.debug(f"Velocity scan error: {e}")
+        return
+
+    if not alerts:
+        return
+
+    logger.info(f"Velocity pre-scan: {len(alerts)} alert(s) firing")
+    for i, alert in enumerate(alerts):
+        if i > 0:
+            await asyncio.sleep(_ALERT_STAGGER_SECONDS)
+        try:
+            msg = format_velocity_alert(alert)
+            await send_alert(msg)
+            alert_type = (
+                "VELOCITY_DROP" if alert["kind"] == "drop" else "VELOCITY_SURGE"
+            )
+            record_alert(alert["ticker"], alert_type, msg)
+        except Exception as e:
+            logger.debug(f"Velocity alert send error ({alert.get('ticker')}): {e}")
+
+
 async def scan_standalone_uoa(config: dict):
     """Fire standalone UOA alerts for watchlist tickers (once per day per ticker).
 
@@ -435,6 +481,24 @@ def create_scheduler() -> AsyncIOScheduler:
         misfire_grace_time=120,
     )
 
+    # Fast velocity pre-scan every 30s during market hours, weekdays only.
+    # Skips internally when outside the full/movers window, so 8:00-9:30 and
+    # post-3:55 no-ops cheaply.
+    scheduler.add_job(
+        run_fast_velocity_scan,
+        CronTrigger(
+            hour=f"{open_h}-{close_h}",
+            second="0,30",
+            day_of_week="mon-fri",
+            timezone=ET,
+        ),
+        id="fast_velocity_scan",
+        name="Fast Velocity Scan",
+        misfire_grace_time=15,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # Daily cleanup at 4:00 PM ET
     scheduler.add_job(
         run_daily_cleanup,
@@ -455,7 +519,7 @@ def create_scheduler() -> AsyncIOScheduler:
 
     logger.info(
         f"Scheduler configured: pre-market at 8:00 ET, brief at {brief_time} ET, "
-        f"scans every {interval}min {open_time}-{close_time} ET, "
+        f"scans every {interval}min + velocity every 30s {open_time}-{close_time} ET, "
         f"weekly summary Fri 16:05 ET"
     )
     return scheduler

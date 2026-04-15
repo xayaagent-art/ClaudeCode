@@ -13,7 +13,8 @@ Phase 2A filters + Phase 2B enhancements:
 """
 
 import logging
-from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta
 from typing import Optional
 
 import pytz
@@ -26,6 +27,7 @@ from src.iv_calculator import calculate_ivp_and_hv, calculate_ivr
 from src.key_levels import get_key_levels
 from src.market_data import (
     get_intraday_position,
+    get_intraday_snapshot,
     get_market_data,
     get_options_chain,
     get_premarket_data,
@@ -34,6 +36,7 @@ from src.market_data import (
     near_key_level,
 )
 from src.notion_sync import get_premium_timing
+from src.pattern_detector import check_reversal_confirmation, detect_patterns
 from src.sector_guard import check_sector_concentration, record_scan_sector
 from src.signal_scorer import score_signal
 from src.strike_selector import calculate_yield, select_call_strike, select_put_strike
@@ -58,6 +61,27 @@ _PENDING_SIGNAL_MAX_AGE_MINUTES = 60
 # Separate early-warning alerts — fired before full signal criteria are met.
 _PROXIMITY_THRESHOLD_PCT = 1.5
 _PROXIMITY_IVR_MIN = 30
+
+# Proximity alerts only fire on FIRST TOUCH — track last seen price per ticker
+# so repeat scans while a stock hovers near a level don't re-alert.
+_last_proximity_price: dict = {}  # ticker -> {"price": float, "ts": datetime}
+_PROXIMITY_CROSS_BUFFER_PCT = 1.5  # must cross within this % of the level
+
+# --- Velocity pre-scan (FIX — velocity-triggered) ---
+# Fast 30-second scan looking for ±2.5% moves in 3 minutes.
+_VELOCITY_MOVE_PCT = 2.5
+_VELOCITY_LOOKBACK_BARS = 3
+# Dedup velocity alerts per (ticker, direction) for 10 minutes so a sustained
+# move only fires once, not every 30 seconds while it continues.
+_last_velocity_alert: dict = {}  # (ticker, direction) -> datetime
+_VELOCITY_DEDUP_MINUTES = 10
+# Tickers that triggered velocity and deserve immediate full-scan priority.
+_priority_scan_queue: set = set()
+
+# --- Reversal confirmation (FIX — reversal gate) ---
+# CSP/CC signals that pass price position but lack reversal confirmation are
+# queued as pending. Stored alongside the existing price-gate pending queue.
+_PARALLEL_FETCH_WORKERS = 8
 
 
 def load_config() -> dict:
@@ -196,6 +220,89 @@ def _check_price_gate(signal: dict, sig_type: str) -> dict:
         }
 
 
+def _check_reversal_gate(signal: dict, sig_type: str, snapshot: Optional[dict]) -> dict:
+    """Run reversal confirmation using cached intraday bars from the snapshot.
+
+    Fail-open: if no snapshot is available (early market, fetch error), we
+    let the signal through so we don't silence everything. Same semantics as
+    the price gate.
+
+    Returns dict:
+      confirmed: bool
+      pattern: str
+      reason: "confirmed" | "awaiting_reversal" | "no_bars"
+    """
+    if snapshot is None or "bars" not in snapshot or snapshot["bars"] is None:
+        return {"confirmed": True, "pattern": "none", "reason": "no_bars"}
+    bars = snapshot["bars"]
+    if len(bars) < 5:
+        return {"confirmed": True, "pattern": "none", "reason": "no_bars"}
+
+    side = "long" if sig_type == "CSP" else "short"
+    # Only look at the last 5 bars for reversal confirmation
+    recent = bars.tail(5)
+    result = check_reversal_confirmation(recent, side)
+
+    if result["confirmed"]:
+        return {
+            "confirmed": True,
+            "pattern": result["pattern"],
+            "reason": "confirmed",
+        }
+    return {
+        "confirmed": False,
+        "pattern": "none",
+        "reason": "awaiting_reversal",
+    }
+
+
+def _check_full_gate(
+    signal: dict,
+    sig_type: str,
+    snapshot: Optional[dict] = None,
+) -> dict:
+    """Run price position + reversal confirmation gates together.
+
+    Returns dict:
+      passed: bool                           — both gates OK
+      reason: str                            — price reason | "awaiting_reversal"
+      price_position: float | None
+      key_level: dict | None
+      reversal: dict                         — {confirmed, pattern, reason}
+    """
+    price_gate = _check_price_gate(signal, sig_type)
+    price_position = price_gate.get("price_position")
+    # Always annotate the signal with price position so line 3 chip renders
+    signal["price_position"] = price_position
+
+    if not price_gate["passed"]:
+        return {
+            "passed": False,
+            "reason": price_gate["reason"],
+            "price_position": price_position,
+            "key_level": price_gate.get("key_level"),
+            "reversal": {"confirmed": False, "pattern": "none", "reason": "skipped"},
+        }
+
+    reversal = _check_reversal_gate(signal, sig_type, snapshot)
+    if not reversal["confirmed"]:
+        return {
+            "passed": False,
+            "reason": "awaiting_reversal",
+            "price_position": price_position,
+            "key_level": price_gate.get("key_level"),
+            "reversal": reversal,
+        }
+
+    return {
+        "passed": True,
+        "reason": price_gate["reason"],
+        "price_position": price_position,
+        "key_level": price_gate.get("key_level"),
+        "reversal": reversal,
+    }
+
+
 def _queue_pending_signal(signal: dict, sig_type: str, gate: dict):
     """Cache a gated signal for re-check on the next scan cycle."""
     ticker = signal.get("ticker", "")
@@ -205,13 +312,21 @@ def _queue_pending_signal(signal: dict, sig_type: str, gate: dict):
         "sig_type": sig_type,
         "queued_at": datetime.now(ET),
         "last_position": gate.get("price_position"),
+        "last_reason": gate.get("reason"),
     }
     pp = gate.get("price_position")
     pp_str = f"{pp * 100:.0f}%" if pp is not None else "N/A"
-    logger.info(
-        f"[SKIPPED] {ticker} {sig_type} — price at {pp_str} of range, "
-        f"not near {'low' if sig_type == 'CSP' else 'high'}. Will re-check."
-    )
+    reason = gate.get("reason") or ""
+    if reason == "awaiting_reversal":
+        logger.info(
+            f"[SKIPPED] {ticker} {sig_type} — price at {pp_str} of range, "
+            f"reversal not confirmed. Will re-check."
+        )
+    else:
+        logger.info(
+            f"[SKIPPED] {ticker} {sig_type} — price at {pp_str} of range, "
+            f"not near {'low' if sig_type == 'CSP' else 'high'}. Will re-check."
+        )
 
 
 def drain_pending_signals(sig_type: Optional[str] = None) -> list[dict]:
@@ -240,19 +355,28 @@ def drain_pending_signals(sig_type: Optional[str] = None) -> list[dict]:
 
         signal = entry["signal"]
         entry_type = entry["sig_type"]
-        gate = _check_price_gate(signal, entry_type)
+        snapshot = get_intraday_snapshot(signal.get("ticker", ""))
+        gate = _check_full_gate(signal, entry_type, snapshot)
         if gate["passed"]:
             # Annotate the re-fire reason so the alert can show why it fired late
             signal["gate_reason"] = gate["reason"]
             signal["gated_wait_minutes"] = round(age_min, 1)
+            reversal = gate.get("reversal") or {}
+            if reversal.get("pattern") and reversal["pattern"] != "none":
+                signal["reversal_pattern"] = reversal["pattern"]
+                signal.setdefault("tags", []).append(
+                    f"\U0001f504 Reversal: {reversal['pattern']}"
+                )
             fired.append(signal)
+            pp = gate.get("price_position") or 0
             logger.info(
                 f"[RE-FIRE] {signal.get('ticker')} {entry_type} — "
-                f"position now {gate['price_position']:.0%}, waited {age_min:.0f}m"
+                f"position now {pp:.0%}, waited {age_min:.0f}m"
             )
         else:
             # Still gated, keep it
             entry["last_position"] = gate.get("price_position")
+            entry["last_reason"] = gate.get("reason")
 
     # Apply updates
     for key in expired_keys:
@@ -484,11 +608,12 @@ def scan_csp_signals(config: dict = None) -> list[dict]:
     Each signal is scored 1-10. Score data is attached to the signal dict.
     Sector guard: max 1 CSP per sector per scan, suppress if 3+ open in sector.
 
-    Applies the price-position gate (FIX 1/2): signals whose underlying is
-    NOT in the bottom 35% of today's intraday range AND not within 2% of a
-    key support level are queued in _pending_signals instead of being
-    returned. Any previously-queued CSP signals that now qualify are
-    re-fired and returned alongside fresh signals.
+    Applies the full gate (price position + reversal confirmation). Signals
+    that fail either are queued in _pending_signals and re-checked on each
+    subsequent scan. Chart patterns (double bottom / V-bottom / bull flag)
+    from pattern_detector add a score boost. Ticker evaluations run in
+    parallel across up to _PARALLEL_FETCH_WORKERS threads so the scan time
+    collapses from ~45s to ~8s on a 25-ticker watchlist.
     """
     config = config or load_config()
     params = config["signal_params"]
@@ -499,64 +624,111 @@ def scan_csp_signals(config: dict = None) -> list[dict]:
     for refire in drain_pending_signals("CSP"):
         signals.append(refire)
 
-    for ticker in config["watchlist"]:
-        # Sector concentration check before full evaluation
+    watchlist = list(config.get("watchlist", []) or [])
+    if not watchlist:
+        return signals
+
+    # Parallel evaluate_csp across the watchlist. Each call is IO-bound
+    # (yfinance + options chain) so threads scale well. Sector concentration
+    # + gate + scoring stay serial because they depend on prior scan state.
+    eval_results: dict = {}
+    with ThreadPoolExecutor(max_workers=_PARALLEL_FETCH_WORKERS) as ex:
+        future_map = {
+            ex.submit(evaluate_csp, ticker, params): ticker for ticker in watchlist
+        }
+        for future in as_completed(future_map):
+            ticker = future_map[future]
+            try:
+                eval_results[ticker] = future.result()
+            except Exception as e:
+                logger.debug(f"evaluate_csp({ticker}) failed: {e}")
+                eval_results[ticker] = None
+
+    # Priority: tickers flagged by the velocity scan get evaluated first
+    # so their full signal fires in the same scan cycle as the velocity alert.
+    priority = [t for t in watchlist if t in _priority_scan_queue]
+    normal = [t for t in watchlist if t not in _priority_scan_queue]
+    ordered_tickers = priority + normal
+    # Clear the priority queue for next scan
+    for t in priority:
+        _priority_scan_queue.discard(t)
+
+    for ticker in ordered_tickers:
+        signal = eval_results.get(ticker)
+        if not signal:
+            continue
+        # Sector concentration check (mutates scan_sectors state)
         sector_check = check_sector_concentration(ticker, scan_sectors)
         if not sector_check["allowed"]:
             logger.info(f"Skipping {ticker} CSP — {sector_check['reason']}")
             continue
+        # Apply seller TA checks (score adjustment + flags)
+        ta = apply_seller_ta(signal)
+        signal["ta_tags"] = ta["ta_tags"]
+        signal["tags"].extend(ta["ta_tags"])
 
-        signal = evaluate_csp(ticker, params)
-        if signal:
-            # Apply seller TA checks (score adjustment + flags)
-            ta = apply_seller_ta(signal)
-            signal["ta_tags"] = ta["ta_tags"]
-            signal["tags"].extend(ta["ta_tags"])
+        # Volume context (Upgrade 3A): +0.5 score on SURGE
+        vol_ctx = get_volume_context(ticker)
+        signal["vol_context"] = vol_ctx
+        vol_boost = vol_ctx["score_boost"] if vol_ctx else 0.0
 
-            # Volume context (Upgrade 3A): +0.5 score on SURGE
-            vol_ctx = get_volume_context(ticker)
-            signal["vol_context"] = vol_ctx
-            vol_boost = vol_ctx["score_boost"] if vol_ctx else 0.0
+        # Time-of-day context (Upgrade 3B)
+        time_ctx = _get_time_context()
+        signal["signal_time"] = time_ctx["timestamp"]
+        signal["time_note"] = time_ctx["note"]
 
-            # Time-of-day context (Upgrade 3B)
-            time_ctx = _get_time_context()
-            signal["signal_time"] = time_ctx["timestamp"]
-            signal["time_note"] = time_ctx["note"]
+        # Phase 5: IVP/HV + UOA enrichment
+        phase5 = _apply_phase5_enrichment(signal, "CSP")
+        signal["ta_tags"].extend(phase5["flags"])
+        signal["tags"].extend(phase5["flags"])
 
-            # Phase 5: IVP/HV + UOA enrichment
-            phase5 = _apply_phase5_enrichment(signal, "CSP")
-            signal["ta_tags"].extend(phase5["flags"])
-            signal["tags"].extend(phase5["flags"])
+        # Chart-pattern enrichment — shared snapshot fetch used by the
+        # gate's reversal check as well.
+        snapshot = get_intraday_snapshot(ticker)
+        pattern_boost = 0.0
+        if snapshot and snapshot.get("bars") is not None:
+            patterns = detect_patterns(snapshot["bars"])
+            if patterns["score_boost"] > 0:
+                pattern_boost = patterns["score_boost"]
+                signal["patterns"] = patterns
+                signal["tags"].extend(patterns["flags"])
+                signal["ta_tags"].extend(patterns["flags"])
 
-            scoring = score_signal(
-                signal,
-                ta_adjustment=ta["ta_adjustment"] + vol_boost + phase5["adjustment"],
-            )
-            signal["score"] = scoring["score"]
-            signal["score_label"] = scoring["label"]
-            signal["score_breakdown"] = scoring["breakdown"]
-            signal["should_alert"] = scoring["should_alert"]
-            signal["sector"] = sector_check["sector"]
+        scoring = score_signal(
+            signal,
+            ta_adjustment=(
+                ta["ta_adjustment"] + vol_boost + phase5["adjustment"] + pattern_boost
+            ),
+        )
+        signal["score"] = scoring["score"]
+        signal["score_label"] = scoring["label"]
+        signal["score_breakdown"] = scoring["breakdown"]
+        signal["should_alert"] = scoring["should_alert"]
+        signal["sector"] = sector_check["sector"]
 
-            # Suppress if TA breakdown detected
-            if ta["suppress"]:
-                signal["should_alert"] = False
+        # Suppress if TA breakdown detected
+        if ta["suppress"]:
+            signal["should_alert"] = False
 
-            # FIX 1: Price position gate — signals still marked for alert
-            # only fire when stock is in bottom 35% of today's range OR
-            # within 2% of key support. Gated signals are queued for re-check.
-            if signal.get("should_alert", True):
-                gate = _check_price_gate(signal, "CSP")
-                signal["price_position"] = gate.get("price_position")
-                signal["gate_reason"] = gate["reason"]
-                signal["gate_key_level"] = gate.get("key_level")
-                if not gate["passed"]:
-                    _queue_pending_signal(signal, "CSP", gate)
-                    record_scan_sector(scan_sectors, ticker)
-                    continue
+        # Full gate: price position + reversal confirmation.
+        # Signals that fail either are queued for re-check.
+        if signal.get("should_alert", True):
+            gate = _check_full_gate(signal, "CSP", snapshot)
+            signal["gate_reason"] = gate["reason"]
+            signal["gate_key_level"] = gate.get("key_level")
+            if not gate["passed"]:
+                _queue_pending_signal(signal, "CSP", gate)
+                record_scan_sector(scan_sectors, ticker)
+                continue
+            reversal = gate.get("reversal") or {}
+            if reversal.get("pattern") and reversal["pattern"] != "none":
+                signal["reversal_pattern"] = reversal["pattern"]
+                signal["tags"].append(
+                    f"\U0001f504 Reversal: {reversal['pattern']}"
+                )
 
-            signals.append(signal)
-            record_scan_sector(scan_sectors, ticker)
+        signals.append(signal)
+        record_scan_sector(scan_sectors, ticker)
 
     return signals
 
@@ -566,9 +738,12 @@ def scan_cc_signals(config: dict = None) -> list[dict]:
 
     Each signal is scored 1-10. Score data is attached to the signal dict.
 
-    Applies the price-position gate (FIX 1/2): CC signals only fire when
-    the stock is in the top 35% of today's intraday range OR within 2%
-    of a key resistance level. Gated signals are queued.
+    Applies the full gate (price position + bearish reversal confirmation).
+    CC signals only fire when the stock is in the top 35% of today's
+    intraday range (or within 2% of key resistance) AND shows a bearish
+    reversal pattern on the last bar. Chart patterns (double top / bull
+    flag inverse) provide a score boost. Positions are evaluated in
+    parallel across threads.
     """
     config = config or load_config()
     params = config["signal_params"]
@@ -579,69 +754,255 @@ def scan_cc_signals(config: dict = None) -> list[dict]:
     for refire in drain_pending_signals("CC"):
         signals.append(refire)
 
-    for ticker, pos in positions.items():
-        if not pos or pos.get("shares", 0) < 100:
-            continue
-        signal = evaluate_cc(ticker, pos, params)
-        if signal:
-            # Apply seller TA checks (score adjustment + flags)
-            ta = apply_seller_ta(signal)
-            signal["ta_tags"] = ta["ta_tags"]
-            signal["tags"].extend(ta["ta_tags"])
+    cc_candidates = [
+        (t, p) for t, p in positions.items()
+        if p and p.get("shares", 0) >= 100
+    ]
+    if not cc_candidates:
+        return signals
 
-            # Volume context (Upgrade 3A): +0.5 score on SURGE
-            vol_ctx = get_volume_context(ticker)
-            signal["vol_context"] = vol_ctx
-            vol_boost = vol_ctx["score_boost"] if vol_ctx else 0.0
-
-            # Time-of-day context (Upgrade 3B)
-            time_ctx = _get_time_context()
-            signal["signal_time"] = time_ctx["timestamp"]
-            signal["time_note"] = time_ctx["note"]
-
-            # Phase 5: IVP/HV + UOA enrichment
-            phase5 = _apply_phase5_enrichment(signal, "CC")
-            signal["ta_tags"].extend(phase5["flags"])
-            signal["tags"].extend(phase5["flags"])
-
-            scoring = score_signal(
-                signal,
-                ta_adjustment=ta["ta_adjustment"] + vol_boost + phase5["adjustment"],
-            )
-            signal["score"] = scoring["score"]
-            signal["score_label"] = scoring["label"]
-            signal["score_breakdown"] = scoring["breakdown"]
-            signal["should_alert"] = scoring["should_alert"]
-
-            # Suppress if TA breakdown detected
-            if ta["suppress"]:
-                signal["should_alert"] = False
-
-            # Premium timing intelligence for CC
+    # Parallel evaluate_cc across candidates.
+    eval_results: dict = {}
+    with ThreadPoolExecutor(max_workers=_PARALLEL_FETCH_WORKERS) as ex:
+        future_map = {
+            ex.submit(evaluate_cc, ticker, pos, params): ticker
+            for ticker, pos in cc_candidates
+        }
+        for future in as_completed(future_map):
+            ticker = future_map[future]
             try:
-                timing = get_premium_timing(
-                    ticker, signal["strike"], signal["expiry"], "CC",
+                eval_results[ticker] = future.result()
+            except Exception as e:
+                logger.debug(f"evaluate_cc({ticker}) failed: {e}")
+                eval_results[ticker] = None
+
+    priority = [t for t, _ in cc_candidates if t in _priority_scan_queue]
+    normal = [t for t, _ in cc_candidates if t not in _priority_scan_queue]
+    ordered_tickers = priority + normal
+    for t in priority:
+        _priority_scan_queue.discard(t)
+
+    for ticker in ordered_tickers:
+        signal = eval_results.get(ticker)
+        if not signal:
+            continue
+
+        # Apply seller TA checks (score adjustment + flags)
+        ta = apply_seller_ta(signal)
+        signal["ta_tags"] = ta["ta_tags"]
+        signal["tags"].extend(ta["ta_tags"])
+
+        # Volume context (Upgrade 3A): +0.5 score on SURGE
+        vol_ctx = get_volume_context(ticker)
+        signal["vol_context"] = vol_ctx
+        vol_boost = vol_ctx["score_boost"] if vol_ctx else 0.0
+
+        # Time-of-day context (Upgrade 3B)
+        time_ctx = _get_time_context()
+        signal["signal_time"] = time_ctx["timestamp"]
+        signal["time_note"] = time_ctx["note"]
+
+        # Phase 5: IVP/HV + UOA enrichment
+        phase5 = _apply_phase5_enrichment(signal, "CC")
+        signal["ta_tags"].extend(phase5["flags"])
+        signal["tags"].extend(phase5["flags"])
+
+        # Chart patterns — for CCs we care about double top + V-top signals
+        snapshot = get_intraday_snapshot(ticker)
+        pattern_boost = 0.0
+        if snapshot and snapshot.get("bars") is not None:
+            patterns = detect_patterns(snapshot["bars"])
+            # Only double-top and V-top style patterns boost CCs; double
+            # bottom would actually contradict a CC entry.
+            if patterns.get("double_top"):
+                pattern_boost += 1.0
+                signal["tags"].append("\U0001f4ca Double top")
+                signal["ta_tags"].append("\U0001f4ca Double top")
+            signal["patterns"] = patterns
+
+        scoring = score_signal(
+            signal,
+            ta_adjustment=(
+                ta["ta_adjustment"] + vol_boost + phase5["adjustment"] + pattern_boost
+            ),
+        )
+        signal["score"] = scoring["score"]
+        signal["score_label"] = scoring["label"]
+        signal["score_breakdown"] = scoring["breakdown"]
+        signal["should_alert"] = scoring["should_alert"]
+
+        # Suppress if TA breakdown detected
+        if ta["suppress"]:
+            signal["should_alert"] = False
+
+        # Premium timing intelligence for CC
+        try:
+            timing = get_premium_timing(
+                ticker, signal["strike"], signal["expiry"], "CC",
+            )
+            if timing.get("timing_tag") and signal["should_alert"]:
+                signal["tags"].append(timing["timing_tag"])
+                signal["premium_timing"] = timing
+        except Exception:
+            pass
+
+        # Full gate: price position + bearish reversal confirmation.
+        if signal.get("should_alert", True):
+            gate = _check_full_gate(signal, "CC", snapshot)
+            signal["gate_reason"] = gate["reason"]
+            signal["gate_key_level"] = gate.get("key_level")
+            if not gate["passed"]:
+                _queue_pending_signal(signal, "CC", gate)
+                continue
+            reversal = gate.get("reversal") or {}
+            if reversal.get("pattern") and reversal["pattern"] != "none":
+                signal["reversal_pattern"] = reversal["pattern"]
+                signal["tags"].append(
+                    f"\U0001f504 Reversal: {reversal['pattern']}"
                 )
-                if timing.get("timing_tag") and signal["should_alert"]:
-                    signal["tags"].append(timing["timing_tag"])
-                    signal["premium_timing"] = timing
-            except Exception:
-                pass
 
-            # FIX 1: Price position gate — CC only fires in top 35% of range
-            # or within 2% of key resistance. Gated signals are queued for re-check.
-            if signal.get("should_alert", True):
-                gate = _check_price_gate(signal, "CC")
-                signal["price_position"] = gate.get("price_position")
-                signal["gate_reason"] = gate["reason"]
-                signal["gate_key_level"] = gate.get("key_level")
-                if not gate["passed"]:
-                    _queue_pending_signal(signal, "CC", gate)
-                    continue
-
-            signals.append(signal)
+        signals.append(signal)
 
     return signals
+
+
+def _fetch_velocity_bars(ticker: str):
+    """Fetch just what we need to compute velocity: the cached intraday bars.
+
+    Returns the last 3 1-min bar closes plus timestamp + current price, or
+    None if data is unavailable.
+    """
+    snap = get_intraday_snapshot(ticker)
+    if not snap or snap.get("bars") is None:
+        return None
+    bars = snap["bars"]
+    if len(bars) < _VELOCITY_LOOKBACK_BARS:
+        return None
+    tail = bars.tail(_VELOCITY_LOOKBACK_BARS)
+    try:
+        closes = [float(c) for c in tail["Close"].tolist()]
+    except Exception:
+        return None
+    return {"closes": closes, "current": closes[-1]}
+
+
+def fast_velocity_scan(config: dict = None) -> list[dict]:
+    """Fast 30-second pre-scan for ±2.5% moves in the last 3 minutes.
+
+    Fetches only the cached intraday bars (shared with the 1-min full scan
+    via the 30s cache) and computes move_pct across the last 3 closes. Any
+    ticker hitting the threshold gets an immediate velocity alert AND goes
+    into the priority scan queue so its full signal fires first on the next
+    1-min scan cycle.
+
+    Dedup: per (ticker, direction) for 10 minutes so a sustained move only
+    alerts once.
+
+    Returns list of dicts ready for format_velocity_alert():
+      {
+        kind: "drop" | "surge",
+        ticker: str,
+        price: float,
+        move_pct: float,        (signed)
+        iv: float | None,
+        ivr: float | None,
+        signal_time: str,
+      }
+    """
+    config = config or load_config()
+    watchlist = list(config.get("watchlist", []) or [])
+    positions = config.get("positions", {}) or {}
+    owned = [t for t, p in positions.items() if p and p.get("shares", 0) >= 100]
+    tickers = sorted(set(watchlist) | set(owned))
+    if not tickers:
+        return []
+
+    # Fetch bars for all tickers in parallel
+    bar_results: dict = {}
+    with ThreadPoolExecutor(max_workers=_PARALLEL_FETCH_WORKERS) as ex:
+        future_map = {ex.submit(_fetch_velocity_bars, t): t for t in tickers}
+        for future in as_completed(future_map):
+            ticker = future_map[future]
+            try:
+                bar_results[ticker] = future.result()
+            except Exception as e:
+                logger.debug(f"velocity fetch {ticker} failed: {e}")
+                bar_results[ticker] = None
+
+    now = datetime.now(ET)
+    alerts = []
+    for ticker in tickers:
+        data = bar_results.get(ticker)
+        if not data:
+            continue
+        closes = data["closes"]
+        if len(closes) < 2 or closes[0] <= 0:
+            continue
+        move_pct = (closes[-1] - closes[0]) / closes[0] * 100
+
+        if move_pct <= -_VELOCITY_MOVE_PCT:
+            direction = "drop"
+            is_csp = True
+        elif move_pct >= _VELOCITY_MOVE_PCT:
+            direction = "surge"
+            is_csp = False
+        else:
+            continue
+
+        # Only fire CSP velocity for watchlist tickers (CSP candidates)
+        # and CC velocity for owned positions (CC candidates)
+        if is_csp and ticker not in watchlist:
+            continue
+        if not is_csp and ticker not in owned:
+            continue
+
+        # Per-direction dedup
+        dedup_key = (ticker, direction)
+        last = _last_velocity_alert.get(dedup_key)
+        if last and (now - last).total_seconds() / 60 < _VELOCITY_DEDUP_MINUTES:
+            continue
+        _last_velocity_alert[dedup_key] = now
+
+        # Best-effort IV/IVR enrichment (non-fatal on error)
+        iv = None
+        ivr = None
+        try:
+            ivr_data = calculate_ivr(ticker)
+            if ivr_data:
+                iv = ivr_data.get("current_iv")
+                ivr = ivr_data.get("ivr")
+        except Exception:
+            pass
+
+        # Flag for priority processing in the next full scan
+        _priority_scan_queue.add(ticker)
+
+        alerts.append({
+            "kind": direction,
+            "ticker": ticker,
+            "price": round(data["current"], 2),
+            "move_pct": round(move_pct, 2),
+            "iv": iv,
+            "ivr": ivr,
+            "signal_time": now.strftime("%H:%M ET"),
+        })
+        logger.info(
+            f"[VELOCITY] {ticker} {direction} {move_pct:+.2f}% in "
+            f"{_VELOCITY_LOOKBACK_BARS}min — priority queued"
+        )
+
+    return alerts
+
+
+def clear_velocity_state():
+    """Test helper — wipe velocity alert dedup + priority queue."""
+    _last_velocity_alert.clear()
+    _priority_scan_queue.clear()
+
+
+def clear_proximity_state():
+    """Test helper — wipe the last-price tracker used by proximity alerts."""
+    _last_proximity_price.clear()
 
 
 def scan_close_signals(config: dict = None) -> list[dict]:
@@ -660,29 +1021,51 @@ def scan_close_signals(config: dict = None) -> list[dict]:
     return signals
 
 
+def _crossed_into_zone(prev_price: Optional[float], current: float, level: float, side: str) -> bool:
+    """Has `current` just crossed into the near-zone around `level`?
+
+    Zone: within ±_PROXIMITY_CROSS_BUFFER_PCT of the level.
+
+    A crossing is "fresh" only if the previous scan had price OUTSIDE the
+    zone. If prev_price is None, we don't have history — treat as a fresh
+    touch (first scan after restart).
+
+    side="support": prev was above zone, now inside or below.
+    side="resistance": prev was below zone, now inside or above.
+    """
+    if level <= 0:
+        return False
+    buffer = _PROXIMITY_CROSS_BUFFER_PCT / 100.0
+    zone_high = level * (1 + buffer)
+    zone_low = level * (1 - buffer)
+
+    in_zone_now = zone_low <= current <= zone_high
+    if not in_zone_now:
+        return False
+
+    if prev_price is None:
+        return True  # first scan ever — alert
+
+    in_zone_prev = zone_low <= prev_price <= zone_high
+    if in_zone_prev:
+        return False  # still hovering, already alerted previously
+
+    # Was outside, now inside → crossed
+    if side == "support":
+        # Expected: dropped from above into the zone
+        return prev_price > zone_high
+    else:
+        # Expected: rose from below into the zone
+        return prev_price < zone_low
+
+
 def scan_proximity_alerts(config: dict = None) -> list[dict]:
-    """Scan watchlist + owned positions for early-warning support/resistance touches.
+    """Scan watchlist + owned positions for first-touch support/resistance alerts.
 
-    FIX 3: These alerts fire BEFORE a full CSP/CC signal qualifies, giving
-    early notice when price first approaches a key level. Gates:
-
-      - Price within 1.5% of a key level
-      - IVR >= 30 (no point flagging low-IV setups)
-      - Ticker-level 2h dedup handled by the caller via alert_manager
-
-    Returns a list of dicts ready for format_proximity_alert():
-      {
-        kind: "support" | "resistance",
-        ticker: str,
-        price: float,
-        level_name: str,
-        level: float,
-        distance_pct: float,
-        iv: float,
-        ivr: float,
-        rsi_14: float | None,
-        signal_time: str,
-      }
+    Fires ONLY on the scan cycle where price first crosses into the near-zone
+    (within 1.5% of a key level). If the stock hovers near the level across
+    multiple scans, subsequent scans are silent until price leaves the zone
+    and re-enters. Requires IVR >= 30 as a base filter.
     """
     config = config or load_config()
     watchlist = list(config.get("watchlist", []) or [])
@@ -696,7 +1079,8 @@ def scan_proximity_alerts(config: dict = None) -> list[dict]:
         if p and p.get("shares", 0) >= 100
     }
 
-    now_str = datetime.now(ET).strftime("%H:%M ET")
+    now = datetime.now(ET)
+    now_str = now.strftime("%H:%M ET")
     alerts = []
 
     for ticker in sorted(support_tickers | resist_tickers):
@@ -720,16 +1104,18 @@ def scan_proximity_alerts(config: dict = None) -> list[dict]:
                 ma_20=data.get("ma_20"),
                 ma_50=data.get("ma_50"),
             ) or {}
-            # Merge MA/BB into the level dict so near_key_level can see them
             level_dict = dict(levels)
             level_dict.setdefault("ma_20", data.get("ma_20"))
             level_dict.setdefault("ma_50", data.get("ma_50"))
             level_dict.setdefault("bb_upper", data.get("bb_upper"))
             level_dict.setdefault("bb_lower", data.get("bb_lower"))
 
+            prev_entry = _last_proximity_price.get(ticker)
+            prev_price = prev_entry["price"] if prev_entry else None
+
             if ticker in support_tickers:
                 kl = near_key_level(price, level_dict, "support", _PROXIMITY_THRESHOLD_PCT)
-                if kl:
+                if kl and _crossed_into_zone(prev_price, price, kl["level"], "support"):
                     alerts.append({
                         "kind": "support",
                         "ticker": ticker,
@@ -745,7 +1131,7 @@ def scan_proximity_alerts(config: dict = None) -> list[dict]:
 
             if ticker in resist_tickers:
                 kl = near_key_level(price, level_dict, "resistance", _PROXIMITY_THRESHOLD_PCT)
-                if kl:
+                if kl and _crossed_into_zone(prev_price, price, kl["level"], "resistance"):
                     alerts.append({
                         "kind": "resistance",
                         "ticker": ticker,
@@ -758,6 +1144,9 @@ def scan_proximity_alerts(config: dict = None) -> list[dict]:
                         "rsi_14": data.get("rsi_14"),
                         "signal_time": now_str,
                     })
+
+            # Always update last seen price for next scan's crossing check
+            _last_proximity_price[ticker] = {"price": price, "ts": now}
 
         except Exception as e:
             logger.debug(f"Proximity scan error for {ticker}: {e}")
