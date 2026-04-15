@@ -488,6 +488,72 @@ def get_intraday_position(ticker: str) -> Optional[dict]:
         return None
 
 
+# Cache raw intraday 1-min bars per ticker for 30 seconds so velocity scan,
+# reversal confirmation, and pattern detection can share a single fetch.
+_intraday_bars_cache: dict = {}
+_INTRADAY_BARS_CACHE_SECONDS = 30
+
+
+def get_intraday_snapshot(ticker: str) -> Optional[dict]:
+    """Fetch + cache today's 1-min bars and derived position metrics.
+
+    Returns dict with:
+      bars: pandas DataFrame of today's 1-min bars (regular session only)
+      price_position: float 0-1 (0 = day low, 1 = day high)
+      day_high / day_low / current: float
+      day_range: float (absolute $)
+
+    Returns None if regular session hasn't produced any bars yet or on fetch
+    error. Caches the full DataFrame for 30s so a single scan cycle only hits
+    yfinance once per ticker even when used by velocity, reversal, and pattern
+    detection.
+    """
+    global _intraday_bars_cache
+
+    now = datetime.now(ET)
+    cached = _intraday_bars_cache.get(ticker)
+    if cached and (now - cached["_cached_at"]).total_seconds() < _INTRADAY_BARS_CACHE_SECONDS:
+        return cached["data"]
+
+    try:
+        stock = yf.Ticker(ticker)
+        intraday = stock.history(period="1d", interval="1m", prepost=False)
+        if intraday.empty or len(intraday) < 2:
+            return None
+
+        day_high = float(intraday["High"].max())
+        day_low = float(intraday["Low"].min())
+        current = float(intraday["Close"].iloc[-1])
+        day_range = day_high - day_low
+
+        if day_range < 0.01:
+            price_position = 0.5
+        else:
+            pp = (current - day_low) / day_range
+            price_position = max(0.0, min(1.0, pp))
+
+        data = {
+            "bars": intraday,
+            "price_position": round(price_position, 3),
+            "day_high": round(day_high, 2),
+            "day_low": round(day_low, 2),
+            "day_range": round(day_range, 2),
+            "current": round(current, 2),
+        }
+        _intraday_bars_cache[ticker] = {"data": data, "_cached_at": now}
+        return data
+
+    except Exception as e:
+        logger.debug(f"Intraday snapshot unavailable for {ticker}: {e}")
+        return None
+
+
+def clear_intraday_caches():
+    """Test helper — wipe intraday position + bars caches."""
+    _intraday_pos_cache.clear()
+    _intraday_bars_cache.clear()
+
+
 def near_key_level(
     price: float,
     levels: dict,

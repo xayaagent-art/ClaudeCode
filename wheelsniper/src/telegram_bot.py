@@ -347,6 +347,43 @@ def format_proximity_alert(alert: dict) -> str:
     )
 
 
+def format_velocity_alert(alert: dict) -> str:
+    """Format a velocity drop/surge alert from the fast 30s pre-scan.
+
+    Layout:
+      ⚡ VELOCITY DROP — TICKER HH:MM ET
+      Down X.X% in 3 min · Price $X · IV X%
+      👀 Fast move — CSP window opening NOW
+      Wait for stabilization before entry
+    """
+    kind = alert.get("kind", "drop")
+    ticker = alert.get("ticker", "")
+    move_pct = alert.get("move_pct") or 0
+    price = alert.get("price") or 0
+    iv = alert.get("iv")
+    ivr = alert.get("ivr")
+    sig_time = alert.get("signal_time") or datetime.now(ET).strftime("%H:%M ET")
+
+    iv_str = f"{iv:.0f}%" if iv is not None else "N/A"
+    ivr_segment = f" \u00b7 IVR {ivr:.0f}" if ivr is not None else ""
+
+    if kind == "drop":
+        header = f"\u26a1 VELOCITY DROP \u2014 {ticker} {sig_time}"
+        move_str = f"Down {abs(move_pct):.1f}% in 3 min"
+        watch = "\U0001f440 Fast move \u2014 CSP window opening NOW"
+    else:
+        header = f"\u26a1 VELOCITY SURGE \u2014 {ticker} {sig_time}"
+        move_str = f"Up {abs(move_pct):.1f}% in 3 min"
+        watch = "\U0001f440 Fast move \u2014 CC window opening NOW"
+
+    return (
+        f"{header}\n"
+        f"{move_str} \u00b7 Price ${price:.2f} \u00b7 IV {iv_str}{ivr_segment}\n"
+        f"{watch}\n"
+        f"Wait for stabilization before entry"
+    )
+
+
 def _tags_block(tags: list) -> str:
     """Format signal tags as a block."""
     if not tags:
