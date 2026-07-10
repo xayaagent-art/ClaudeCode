@@ -1,0 +1,66 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink: #0a0a0a;
+  --color-paper: #fafaf8;
+  --color-accent: #e8480c;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Helvetica Neue", Arial, sans-serif;
+}
+
+html {
+  background: var(--color-paper);
+}
+
+body {
+  @apply bg-paper text-ink font-sans antialiased;
+}
+
+/* Uppercase, letter-spaced micro-label — used for all tags/metadata */
+.micro {
+  @apply text-[10px] leading-none font-semibold uppercase tracking-[0.16em];
+}
+
+.btn {
+  @apply inline-flex items-center justify-center gap-2 border border-ink px-4 py-3 text-[11px] font-bold uppercase tracking-[0.14em] select-none cursor-pointer rounded-none transition-all duration-150 ease-out active:scale-[0.97];
+}
+.btn-solid {
+  @apply bg-ink text-paper hover:bg-ink/85;
+}
+.btn-ghost {
+  @apply bg-transparent text-ink hover:bg-ink hover:text-paper;
+}
+.btn-accent {
+  @apply bg-accent border-accent text-paper hover:brightness-95;
+}
+
+.field {
+  @apply w-full border border-ink/30 bg-transparent px-3 py-2.5 text-[15px] rounded-none outline-none transition-colors duration-150 focus:border-ink placeholder:text-ink/35;
+}
+
+@keyframes pick-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.animate-pick {
+  animation: pick-in 220ms ease-out both;
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.animate-overlay {
+  animation: overlay-in 200ms ease-out both;
+}
