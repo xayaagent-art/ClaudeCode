@@ -1,0 +1,12 @@
+# Generated Xcode project (recreate with: xcodegen generate --spec grove/project.yml --project grove)
+Grove.xcodeproj/
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Xcode
+DerivedData/
+xcuserdata/
+*.xcresult

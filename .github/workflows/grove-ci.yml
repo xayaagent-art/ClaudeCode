@@ -1,0 +1,40 @@
+name: Grove CI
+
+on:
+  push:
+    paths:
+      - "grove/**"
+      - ".github/workflows/grove-ci.yml"
+  pull_request:
+    paths:
+      - "grove/**"
+      - ".github/workflows/grove-ci.yml"
+
+jobs:
+  grovekit-tests:
+    name: GroveKit unit tests (Swift 6.1, Linux)
+    runs-on: ubuntu-latest
+    container: swift:6.1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tests
+        run: swift test --package-path grove/GroveKit
+
+  app-build:
+    name: Grove app build (iOS Simulator)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: xcodegen generate --spec grove/project.yml --project grove
+      - name: Build app
+        run: >
+          xcodebuild
+          -project grove/Grove.xcodeproj
+          -scheme Grove
+          -destination 'generic/platform=iOS Simulator'
+          -configuration Debug
+          CODE_SIGNING_ALLOWED=NO
+          build
