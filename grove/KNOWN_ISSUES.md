@@ -2,11 +2,12 @@
 
 ## Environment-driven limitations of this pass
 
-1. **The app target has not been compiled or run on a device/simulator yet.**
-   This milestone was produced in a Linux container without Xcode. GroveKit
-   (all domain logic) compiles and its tests run on Linux CI; the SwiftUI app
-   target is compiled by the macOS CI job. Until someone runs the app on a
-   simulator, the following PRD exit criteria are *unverified* (not unmet):
+1. **The app has not been run on a device/simulator yet.**
+   This milestone was produced in a Linux container without Xcode. CI verifies
+   compilation: GroveKit's 40 tests pass on Linux (Swift 6.1), and the app
+   target builds for the iOS Simulator on the macOS runner (Grove CI run #1,
+   both jobs green). Until someone runs the app on a simulator, the following
+   PRD exit criteria are *unverified* (not unmet):
    - Dark/light appearance and Dynamic Type behavior on device
    - VoiceOver walkthrough of add/edit flows
    - Reduce Motion behavior in practice
