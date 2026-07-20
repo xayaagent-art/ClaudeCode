@@ -40,6 +40,9 @@ public enum GardenError: Error, Equatable {
     case nameRequired
     case plantNotFound
     case locationNotFound
+    case careEventNotFound
+    case scheduleNotFound
+    case invalidInterval
     case duplicateLocationName(String)
     case notLoaded
 }
@@ -276,6 +279,8 @@ public actor GardenService {
         let demo = DemoGarden.make(asOf: clock.now, existingLocations: snapshot.locations)
         snapshot.locations.append(contentsOf: demo.newLocations)
         snapshot.plants.append(contentsOf: demo.plants)
+        snapshot.careEvents.append(contentsOf: demo.careEvents)
+        snapshot.careSchedules.append(contentsOf: demo.careSchedules)
         try await persist(snapshot)
         return demo.plants
     }
@@ -287,6 +292,8 @@ public actor GardenService {
         let demoPlantIDs = Set(snapshot.plants.filter { $0.origin == .demo }.map(\.id))
         guard !demoPlantIDs.isEmpty else { return }
         snapshot.plants.removeAll { demoPlantIDs.contains($0.id) }
+        snapshot.careEvents.removeAll { demoPlantIDs.contains($0.plantID) }
+        snapshot.careSchedules.removeAll { demoPlantIDs.contains($0.plantID) }
         let stillUsedLocationIDs = Set(snapshot.plants.compactMap(\.locationID))
         snapshot.locations.removeAll { location in
             location.isDemo && !stillUsedLocationIDs.contains(location.id)
@@ -295,6 +302,14 @@ public actor GardenService {
     }
 
     // MARK: - Private
+
+    /// Current time from the injected clock, for same-module extensions.
+    var clockNow: Date { clock.now }
+
+    /// Persist a mutated snapshot, for same-module extensions.
+    func persistSnapshot(_ newSnapshot: GardenSnapshot) async throws {
+        try await persist(newSnapshot)
+    }
 
     private func mutatePlant(
         id: Plant.ID,

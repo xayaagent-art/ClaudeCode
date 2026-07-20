@@ -35,13 +35,59 @@ public struct DerivedStatus: Hashable, Sendable {
 
 /// Derives a plant's descriptive status from what Grove actually knows.
 ///
-/// Milestone 1 has no care events yet, so the engine only distinguishes
-/// "recently added, still learning" from "recorded and stable". It deliberately
-/// never claims a problem it has no evidence for — an overdue date alone must
-/// not produce a red state (PRD 10.4, Milestone 2 acceptance criteria).
+/// The engine deliberately never claims a problem it has no evidence for — an
+/// overdue review produces "Check soon", never a red state (PRD 10.4,
+/// Milestone 2 acceptance criteria).
 public enum StatusEngine {
     /// Days after creation during which a plant is presented as new.
     public static let settlingInDays = 7
+    /// A care event within this window reads as an actively tended plant.
+    public static let recentCareDays = 30
+
+    /// Care-aware derivation (Milestone 2): considers due reviews and recent
+    /// care history before falling back to the record-completeness heuristics.
+    public static func status(
+        for plant: Plant,
+        in snapshot: GardenSnapshot,
+        calendar: Calendar,
+        asOf now: Date
+    ) -> DerivedStatus {
+        if plant.isArchived {
+            return DerivedStatus(status: .dormant, reason: "This plant is archived.")
+        }
+
+        let tasks = snapshot.careSchedules
+            .filter { $0.plantID == plant.id }
+            .compactMap { ScheduleEngine.task(for: $0, in: snapshot, calendar: calendar, now: now) }
+
+        if let due = tasks.first(where: { $0.state == .overdue || $0.state == .dueToday }) {
+            return DerivedStatus(
+                status: .reviewDue,
+                reason: "\(due.schedule.displayTitle) is due. \(due.reason)"
+            )
+        }
+
+        let lastEvent = snapshot.careEvents
+            .filter { $0.plantID == plant.id && $0.type != .skipped }
+            .max { $0.occurredAt < $1.occurredAt }
+
+        if let lastEvent {
+            let days = calendar.dateComponents(
+                [.day],
+                from: calendar.startOfDay(for: lastEvent.occurredAt),
+                to: calendar.startOfDay(for: now)
+            ).day ?? 0
+            if days <= recentCareDays {
+                let ago = days == 0 ? "today" : (days == 1 ? "yesterday" : "\(days) days ago")
+                return DerivedStatus(
+                    status: .doingWell,
+                    reason: "\(lastEvent.type.displayName) \(ago). Nothing concerning has been recorded."
+                )
+            }
+        }
+
+        return status(for: plant, asOf: now)
+    }
 
     public static func status(for plant: Plant, asOf now: Date) -> DerivedStatus {
         if plant.isArchived {

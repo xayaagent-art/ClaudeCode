@@ -1,18 +1,29 @@
 import SwiftUI
+import UserNotifications
 import GroveKit
 
-/// Profile and settings. Milestone 1 contains only things that actually work:
-/// garden data management, onboarding reset, and honest privacy information.
+/// Profile and settings. Contains only things that actually work: garden data
+/// management, care pause, notification status, onboarding reset, privacy.
 struct ProfileView: View {
     @Environment(AppEnvironment.self) private var appEnvironment
     @State private var confirmRemoveDemo = false
     @State private var infoMessage: String?
+    @State private var notificationStatus: UNAuthorizationStatus = .notDetermined
 
     private var garden: GardenModel { appEnvironment.garden }
 
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    travelPauseRow
+                    notificationRow
+                } header: {
+                    Text("Care reminders")
+                } footer: {
+                    Text("Travel mode pauses every review reminder until you're back. Notifications are optional — the Today queue works either way.")
+                }
+
                 Section("Garden") {
                     NavigationLink {
                         ArchivedPlantsView()
@@ -83,6 +94,60 @@ struct ProfileView: View {
             } message: {
                 Text(infoMessage ?? "")
             }
+        }
+    }
+
+    @ViewBuilder
+    private var travelPauseRow: some View {
+        if garden.isTravelPaused, let until = garden.travelPauseUntil {
+            HStack {
+                Label("Travel mode", systemImage: "airplane")
+                Spacer()
+                Text("Until \(until.formatted(date: .abbreviated, time: .omitted))")
+                    .foregroundStyle(.secondary)
+                Button("Resume") {
+                    Task { try? await garden.setTravelPause(until: nil) }
+                }
+            }
+        } else {
+            Menu {
+                Button("Pause for 3 days") { pauseTravel(days: 3) }
+                Button("Pause for 1 week") { pauseTravel(days: 7) }
+                Button("Pause for 2 weeks") { pauseTravel(days: 14) }
+            } label: {
+                Label("Pause reminders for travel", systemImage: "airplane")
+            }
+        }
+    }
+
+    private var notificationRow: some View {
+        HStack {
+            Label("Notifications", systemImage: "bell")
+            Spacer()
+            switch notificationStatus {
+            case .authorized, .provisional, .ephemeral:
+                Text("On").foregroundStyle(.secondary)
+            case .denied:
+                Text("Off in Settings").foregroundStyle(.secondary)
+            default:
+                Button("Enable") {
+                    Task {
+                        _ = await appEnvironment.notifications.requestAuthorization()
+                        notificationStatus = await appEnvironment.notifications.authorizationStatus()
+                    }
+                }
+            }
+        }
+        .task {
+            notificationStatus = await appEnvironment.notifications.authorizationStatus()
+        }
+    }
+
+    private func pauseTravel(days: Int) {
+        Task {
+            try? await garden.setTravelPause(
+                until: Date().addingTimeInterval(TimeInterval(days) * 86_400)
+            )
         }
     }
 

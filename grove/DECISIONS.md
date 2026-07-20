@@ -74,6 +74,35 @@ Zero packages beyond the platform. XcodeGen is a build-time tool (the
 generated .xcodeproj stays out of source control to keep diffs reviewable);
 it can be dropped by committing the generated project if preferred.
 
+## D13. Care tasks are derived, never stored (M2)
+The PRD's `CareTask` entity is realized as a pure computation
+(`ScheduleEngine`) over schedules + events. Deleting an event or editing a
+schedule always yields a consistent queue with no sync between task rows and
+history. If a future milestone needs server-visible tasks, the engine's output
+can be materialized then.
+
+## D14. Watering satisfies a soil-check review (M2)
+Recording any watering also completes a pending "check soil" cycle — the user
+demonstrably looked at the plant. Misting satisfies only misting. The mapping
+lives in `ScheduleEngine.satisfyingEventTypes` with tests.
+
+## D15. Skip restarts the cycle from today (M2)
+Skipping logs an explicit `.skipped` event linked to the schedule, restarting
+the interval. This keeps "skip" visible in history rather than silently
+mutating the schedule.
+**Review needed:** whether skip should instead push to the next natural date.
+
+## D16. Notification behavior (M2)
+One local notification per task, ~9am local on the due day, future-dated tasks
+only (the app itself surfaces anything already due). Permission is requested
+only after the user creates their first schedule, preceded by an in-app
+explanation. Quiet hours, daily summary digest, and notification actions
+(Done/Snooze from the banner) are deferred — see KNOWN_ISSUES.
+
+## D17. Completing a review clears its snooze (M2)
+A logged event that satisfies a snoozed schedule removes the snooze, so the
+next cycle computes from the event rather than resurrecting a stale snooze.
+
 ## D12. Undo window for archive is 5 seconds
 PRD requires a "short undo opportunity" without a number. The action also
 remains reversible forever via Archived plants, so the toast is a convenience,

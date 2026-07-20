@@ -32,7 +32,7 @@ struct UndoToastModifier: ViewModifier {
         content.overlay(alignment: .bottom) {
             if let undo = appEnvironment.garden.pendingUndo {
                 UndoToast(message: undo.message) {
-                    Task { await appEnvironment.garden.undoArchive(undo) }
+                    Task { await appEnvironment.garden.performUndo(undo) }
                 }
                 .padding(.bottom, GroveSpacing.md)
                 .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))

@@ -6,6 +6,8 @@ public enum DemoGarden {
     public struct Contents: Sendable {
         public let newLocations: [PlantLocation]
         public let plants: [Plant]
+        public let careEvents: [CareEvent]
+        public let careSchedules: [CareSchedule]
     }
 
     /// Builds demo content. Reuses locations that already exist by name so the
@@ -189,6 +191,54 @@ public enum DemoGarden {
             ),
         ]
 
-        return Contents(newLocations: newLocations, plants: plants)
+        // Care history and schedules so Today shows a real, explainable queue:
+        // the rubber plant's soil check is due now, the fern's mist is overdue
+        // by a day, and the pothos was watered recently (nothing due).
+        var events: [CareEvent] = []
+        var schedules: [CareSchedule] = []
+
+        func event(_ plant: Plant, _ type: CareEventType, daysAgo: Int, note: String = "") {
+            let at = now.addingTimeInterval(-TimeInterval(daysAgo) * 86_400)
+            events.append(CareEvent(
+                plantID: plant.id, type: type, occurredAt: at, note: note, createdAt: at
+            ))
+        }
+
+        func schedule(_ plant: Plant, _ kind: CareTaskKind, every intervalDays: Int, anchoredDaysAgo: Int) {
+            let anchor = now.addingTimeInterval(-TimeInterval(anchoredDaysAgo) * 86_400)
+            schedules.append(CareSchedule(
+                plantID: plant.id, kind: kind, intervalDays: intervalDays,
+                anchorDate: anchor, createdAt: anchor, updatedAt: anchor
+            ))
+        }
+
+        let rubberPlant = plants[0]
+        let monstera = plants[1]
+        let pothos = plants[2]
+        let fern = plants[4]
+
+        event(rubberPlant, .soilCheckedDry, daysAgo: 12)
+        event(rubberPlant, .wateredThoroughly, daysAgo: 10)
+        event(rubberPlant, .rotated, daysAgo: 5)
+        schedule(rubberPlant, .checkSoil, every: 10, anchoredDaysAgo: 20)
+
+        event(monstera, .wateredThoroughly, daysAgo: 6)
+        event(monstera, .fertilized, daysAgo: 20)
+        schedule(monstera, .checkSoil, every: 9, anchoredDaysAgo: 15)
+        schedule(monstera, .fertilize, every: 30, anchoredDaysAgo: 20)
+
+        event(pothos, .wateredThoroughly, daysAgo: 2, note: "Leaves had softened slightly.")
+        schedule(pothos, .checkSoil, every: 12, anchoredDaysAgo: 14)
+
+        event(fern, .misted, daysAgo: 4)
+        event(fern, .wateredSmallAmount, daysAgo: 3)
+        schedule(fern, .mist, every: 3, anchoredDaysAgo: 10)
+
+        return Contents(
+            newLocations: newLocations,
+            plants: plants,
+            careEvents: events,
+            careSchedules: schedules
+        )
     }
 }

@@ -10,11 +10,22 @@ final class AppEnvironment {
     let garden: GardenModel
     let media: any MediaStoring
     let analytics: any AnalyticsTracking
+    let notifications: any NotificationScheduling
+    let notificationCoordinator: NotificationCoordinator
 
-    init(garden: GardenModel, media: any MediaStoring, analytics: any AnalyticsTracking) {
+    init(
+        garden: GardenModel,
+        media: any MediaStoring,
+        analytics: any AnalyticsTracking,
+        notifications: any NotificationScheduling = NoOpNotificationScheduler(),
+        notificationCoordinator: NotificationCoordinator = NotificationCoordinator()
+    ) {
         self.garden = garden
         self.media = media
         self.analytics = analytics
+        self.notifications = notifications
+        self.notificationCoordinator = notificationCoordinator
+        garden.notifications = notifications
     }
 
     static func live() -> AppEnvironment {
@@ -44,7 +55,8 @@ final class AppEnvironment {
             return AppEnvironment(
                 garden: GardenModel(service: service, media: media, analytics: analytics),
                 media: media,
-                analytics: analytics
+                analytics: analytics,
+                notifications: UNNotificationScheduler()
             )
         } catch {
             // Application Support was unavailable — extremely rare. Fall back to

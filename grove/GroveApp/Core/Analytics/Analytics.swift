@@ -8,6 +8,9 @@ enum AnalyticsEvent: String {
     case plantCreated = "plant_created"
     case plantArchived = "plant_archived"
     case demoGardenInstalled = "demo_garden_installed"
+    case careEventLogged = "care_event_logged"
+    case careTaskSnoozed = "care_task_snoozed"
+    case careScheduleCreated = "care_schedule_created"
 }
 
 protocol AnalyticsTracking: Sendable {

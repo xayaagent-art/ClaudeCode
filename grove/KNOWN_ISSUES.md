@@ -18,11 +18,21 @@
    generate --spec grove/project.yml --project grove`, then build the `Grove`
    scheme in Xcode.
 
+## Deferred within Milestone 2 scope
+
+12. **Adaptive schedule suggestions** (PRD 10.6 "You usually find the soil
+    still moist at seven days…") need accumulated history; the event data and
+    `CareGuidanceSource.learned` are in place. Planned once real usage exists.
+13. **Notification actions** (Done/Snooze buttons on the banner), **quiet
+    hours**, and the **daily summary digest** (PRD 22) are not built; current
+    notifications are one-per-task, tap-to-open only.
+14. **Vacation caregiver mode** (PRD 10.6) — only the travel pause exists.
+
 ## Deferred within Milestone 1 scope
 
 3. **Batch actions** (multi-select watering/move/archive from Garden) are part
-   of the full Garden spec (PRD 10.3) but not the M1 scope list; deferred to
-   M2 where batch "mark watered" becomes meaningful.
+   of the full Garden spec (PRD 10.3) but not the M1 scope list; deferred
+   until batch "mark watered" is meaningful with real usage.
 4. **Landscape/iPad layouts** — portrait iPhone only, per PRD 14.3 priority.
    No layout is hard-broken in landscape, but it is not designed for.
 5. **Image EXIF capture date** is not read; `MediaAsset.capturedAt` stays nil

@@ -28,18 +28,35 @@ struct RootView: View {
 }
 
 struct MainTabView: View {
+    enum Tab: Hashable {
+        case today, garden, scan, profile
+    }
+
+    @Environment(AppEnvironment.self) private var appEnvironment
+    @State private var selection: Tab = .today
+
     var body: some View {
-        TabView {
+        TabView(selection: $selection) {
             TodayView()
                 .tabItem { Label("Today", systemImage: "sun.horizon") }
+                .tag(Tab.today)
             GardenView()
                 .tabItem { Label("Garden", systemImage: "leaf") }
+                .tag(Tab.garden)
             ScanView()
                 .tabItem { Label("Scan", systemImage: "camera.viewfinder") }
+                .tag(Tab.scan)
             ProfileView()
                 .tabItem { Label("Profile", systemImage: "person.crop.circle") }
+                .tag(Tab.profile)
         }
         .tint(GroveColor.brand)
+        .onChange(of: appEnvironment.notificationCoordinator.pendingPlantID) {
+            // A tapped notification always lands on Today, which opens the plant.
+            if appEnvironment.notificationCoordinator.pendingPlantID != nil {
+                selection = .today
+            }
+        }
     }
 }
 

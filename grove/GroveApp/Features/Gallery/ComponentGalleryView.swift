@@ -38,6 +38,33 @@ struct ComponentGalleryView: View {
                 )
             }
 
+            Section("Care task card") {
+                CareTaskCard(
+                    task: sampleTask,
+                    plant: samplePlant,
+                    onComplete: { _ in },
+                    onSnooze: { _ in },
+                    onSkip: {},
+                    onOpenPlant: {}
+                )
+            }
+
+            Section("Timeline rows") {
+                TimelineEventRow(event: CareEvent(
+                    plantID: samplePlant.id,
+                    type: .wateredThoroughly,
+                    occurredAt: .now,
+                    createdAt: .now
+                ))
+                TimelineEventRow(event: CareEvent(
+                    plantID: samplePlant.id,
+                    type: .soilCheckedDry,
+                    occurredAt: .now.addingTimeInterval(-86_400),
+                    note: "Top half fully dry",
+                    createdAt: .now
+                ))
+            }
+
             Section("Care attribute rows") {
                 CareAttributeRow(
                     field: .water,
@@ -96,6 +123,27 @@ struct ComponentGalleryView: View {
             scientificName: "Ficus elastica",
             createdAt: .now,
             updatedAt: .now
+        )
+    }
+
+    private var sampleTask: CareTaskItem {
+        let plant = samplePlant
+        let anchor = Date().addingTimeInterval(-10 * 86_400)
+        let schedule = CareSchedule(
+            plantID: plant.id,
+            kind: .checkSoil,
+            intervalDays: 10,
+            anchorDate: anchor,
+            createdAt: anchor,
+            updatedAt: anchor
+        )
+        return CareTaskItem(
+            schedule: schedule,
+            plantID: plant.id,
+            dueDate: Date(),
+            state: .dueToday,
+            reason: "Watered thoroughly 10 days ago. You review this every 10 days.",
+            lastEvent: nil
         )
     }
 }

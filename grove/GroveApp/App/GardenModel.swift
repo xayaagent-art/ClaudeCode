@@ -38,9 +38,14 @@ final class GardenModel {
     }
 
     struct UndoAction: Identifiable, Equatable {
+        enum Kind: Equatable {
+            case restorePlant(Plant.ID)
+            case deleteEvent(CareEvent.ID)
+        }
+
         let id = UUID()
         let message: String
-        let plantID: Plant.ID
+        let kind: Kind
     }
 
     // MARK: - Lifecycle
@@ -109,7 +114,7 @@ final class GardenModel {
     }
 
     func status(for plant: Plant) -> DerivedStatus {
-        StatusEngine.status(for: plant, asOf: clock.now)
+        StatusEngine.status(for: plant, in: snapshot, calendar: .current, asOf: clock.now)
     }
 
     var hasDemoPlants: Bool {
@@ -119,9 +124,10 @@ final class GardenModel {
     /// Counts backing the Today screen's garden status module.
     struct GardenStatusSummary {
         var doingWell = 0
+        var reviewDue = 0
         var gettingToKnow = 0
         var needsAttention = 0
-        var total: Int { doingWell + gettingToKnow + needsAttention }
+        var total: Int { doingWell + reviewDue + gettingToKnow + needsAttention }
     }
 
     var statusSummary: GardenStatusSummary {
@@ -129,7 +135,8 @@ final class GardenModel {
         for plant in activePlants {
             switch status(for: plant).status {
             case .doingWell, .recovering: summary.doingWell += 1
-            case .needsAttention, .reviewDue: summary.needsAttention += 1
+            case .reviewDue: summary.reviewDue += 1
+            case .needsAttention: summary.needsAttention += 1
             case .unknown, .dormant: summary.gettingToKnow += 1
             }
         }
@@ -171,13 +178,18 @@ final class GardenModel {
         await refresh()
         pendingUndo = UndoAction(
             message: "\(plant.displayName) archived",
-            plantID: plant.id
+            kind: .restorePlant(plant.id)
         )
     }
 
-    func undoArchive(_ undo: UndoAction) async {
+    func performUndo(_ undo: UndoAction) async {
         pendingUndo = nil
-        _ = try? await service.restorePlant(id: undo.plantID)
+        switch undo.kind {
+        case .restorePlant(let plantID):
+            _ = try? await service.restorePlant(id: plantID)
+        case .deleteEvent(let eventID):
+            try? await service.deleteCareEvent(id: eventID)
+        }
         await refresh()
     }
 
@@ -236,9 +248,136 @@ final class GardenModel {
         await refresh()
     }
 
+    // MARK: - Care events and schedules (Milestone 2)
+
+    /// Notification scheduler, injected after init to avoid a construction cycle.
+    var notifications: (any NotificationScheduling)?
+
+    var careTasks: [CareTaskItem] {
+        ScheduleEngine.tasks(in: snapshot, calendar: .current, now: clock.now)
+    }
+
+    /// Tasks for the Today queue: overdue and due today.
+    var dueTasks: [CareTaskItem] {
+        careTasks.filter { $0.state == .overdue || $0.state == .dueToday }
+    }
+
+    /// Upcoming tasks within the next week, for the "Coming up" section.
+    var upcomingTasks: [CareTaskItem] {
+        let horizon = clock.now.addingTimeInterval(7 * 86_400)
+        return careTasks.filter { $0.state == .upcoming && $0.dueDate <= horizon }
+    }
+
+    var travelPauseUntil: Date? { snapshot.travelPauseUntil }
+
+    var isTravelPaused: Bool {
+        guard let until = snapshot.travelPauseUntil else { return false }
+        return until > clock.now
+    }
+
+    func events(for plantID: Plant.ID) -> [CareEvent] {
+        snapshot.careEvents
+            .filter { $0.plantID == plantID }
+            .sorted { $0.occurredAt > $1.occurredAt }
+    }
+
+    func schedules(for plantID: Plant.ID) -> [CareSchedule] {
+        snapshot.careSchedules
+            .filter { $0.plantID == plantID }
+            .sorted { $0.createdAt < $1.createdAt }
+    }
+
+    /// Quick log with undo (PRD 10.7): the event saves immediately and the
+    /// toast offers a short window to take it back.
+    func logEvent(
+        plantID: Plant.ID,
+        type: CareEventType,
+        note: String = "",
+        relatedScheduleID: CareSchedule.ID? = nil
+    ) async throws {
+        let event = try await service.logCareEvent(
+            plantID: plantID, type: type, note: note, relatedScheduleID: relatedScheduleID
+        )
+        analytics.track(.careEventLogged)
+        await refresh()
+        let name = plant(id: plantID)?.displayName ?? "Plant"
+        pendingUndo = UndoAction(
+            message: "\(type.displayName) — \(name)",
+            kind: .deleteEvent(event.id)
+        )
+    }
+
+    func deleteEvent(id: CareEvent.ID) async throws {
+        try await service.deleteCareEvent(id: id)
+        await refresh()
+    }
+
+    func completeTask(_ task: CareTaskItem, with type: CareEventType) async throws {
+        try await logEvent(
+            plantID: task.plantID, type: type, relatedScheduleID: task.schedule.id
+        )
+    }
+
+    func snoozeTask(_ task: CareTaskItem, days: Int) async throws {
+        let until = Calendar.current.date(
+            byAdding: .day, value: days, to: Calendar.current.startOfDay(for: clock.now)
+        ) ?? clock.now
+        _ = try await service.snoozeSchedule(id: task.schedule.id, until: until)
+        analytics.track(.careTaskSnoozed)
+        await refresh()
+    }
+
+    func skipTask(_ task: CareTaskItem) async throws {
+        _ = try await service.skipSchedule(id: task.schedule.id)
+        await refresh()
+    }
+
+    @discardableResult
+    func addSchedule(
+        plantID: Plant.ID,
+        kind: CareTaskKind,
+        intervalDays: Int,
+        customTitle: String? = nil
+    ) async throws -> CareSchedule {
+        let schedule = try await service.addSchedule(
+            plantID: plantID, kind: kind, intervalDays: intervalDays, customTitle: customTitle
+        )
+        await refresh()
+        return schedule
+    }
+
+    func updateSchedule(_ schedule: CareSchedule) async throws {
+        _ = try await service.updateSchedule(schedule)
+        await refresh()
+    }
+
+    func deleteSchedule(id: CareSchedule.ID) async throws {
+        try await service.deleteSchedule(id: id)
+        await refresh()
+    }
+
+    func setTravelPause(until: Date?) async throws {
+        try await service.setTravelPause(until: until)
+        await refresh()
+    }
+
     // MARK: - Private
 
     private func refresh() async {
         snapshot = (try? await service.currentSnapshot()) ?? snapshot
+        refreshNotifications()
+    }
+
+    /// Re-plans local notifications to mirror the live queue. Fire-and-forget:
+    /// notification failures must never affect in-app behavior.
+    private func refreshNotifications() {
+        guard let notifications else { return }
+        let tasks = careTasks
+        let names = Dictionary(
+            uniqueKeysWithValues: snapshot.plants.map { ($0.id, $0.displayName) }
+        )
+        Task {
+            await notifications.refresh(tasks: tasks, plantNames: names)
+        }
     }
 }
