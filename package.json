@@ -2,12 +2,11 @@
   "name": "claudecode-monorepo",
   "scripts": {
     "build": "cd footprint && npm install && npm run build",
-    "setup": "bash server/bootstrap.sh",
+    "start": "bash scripts/start.sh",
+    "setup": "bash server/setup.sh",
     "server": "bash server/start.sh",
-    "agent": "npm --prefix agent start",
-    "start:all": "bash scripts/start-all.sh",
-    "lan-ip": "bash server/scripts/lan-ip.sh",
-    "test": "npm --prefix agent test && node --test \"server/scripts/*.test.mjs\"",
-    "typecheck": "npm --prefix agent run typecheck"
+    "bot": "node bot/bot.js",
+    "ip": "bash server/scripts/lan-ip.sh",
+    "test": "node --test \"server/scripts/*.test.mjs\""
   }
 }

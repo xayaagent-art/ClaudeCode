@@ -1,4 +1,0 @@
-node_modules/
-dist/
-# Real config: contains machine-specific settings (and API keys in Phase 2).
-.env

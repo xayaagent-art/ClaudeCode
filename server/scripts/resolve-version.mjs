@@ -24,9 +24,9 @@ const UA = { 'User-Agent': 'minecraft-ai-lab/1.0 (local dev bootstrap)' };
 
 /** Versions this machine's mineflayer/minecraft-data can actually speak. */
 async function mineflayerVersions() {
-  // Resolved from the agent workspace so we read the SAME copy the bot uses.
+  // Resolved from the bot workspace so we read the SAME copy the bot uses.
   const { createRequire } = await import('node:module');
-  const require = createRequire(new URL('../../agent/package.json', import.meta.url));
+  const require = createRequire(new URL('../../bot/package.json', import.meta.url));
   const mcData = require('minecraft-data');
   // `supportedVersions.pc` is ordered oldest -> newest, which is exactly the
   // order we want to search backwards through.
