@@ -67,7 +67,8 @@ function item(
     normalized_name: normalized,
     quantity: 1,
     package_size: null,
-    price: null,
+    unit_price: null,
+    total_price: null,
     category: "Other",
     storage_location: "Pantry",
     classification: "human_food",
@@ -86,89 +87,89 @@ export const fixtureParsedReceipt: ParsedReceipt = {
   total: FIXTURE_TOTAL,
   items: [
     item("TOMATO FETA SOUP 20OZ", "Tomato Feta Soup", {
-      package_size: "20 oz", price: 3.99, category: "Pantry", storage_location: "Pantry", confidence: 0.96,
+      package_size: "20 oz", total_price: 3.99, category: "Pantry", storage_location: "Pantry", confidence: 0.96,
     }),
     item("VANILLA ICE CREAM 1PT", "Vanilla Ice Cream", {
-      package_size: "1 pt", price: 3.49, category: "Frozen", storage_location: "Freezer", confidence: 0.97,
+      package_size: "1 pt", total_price: 3.49, category: "Frozen", storage_location: "Freezer", confidence: 0.97,
     }),
     item("ORG VANILLA YOGURT 32OZ", "Organic Vanilla Yogurt", {
-      package_size: "32 oz", price: 4.29, category: "Dairy", storage_location: "Fridge", confidence: 0.96,
+      package_size: "32 oz", total_price: 4.29, category: "Dairy", storage_location: "Fridge", confidence: 0.96,
     }),
     item("OAT BEVERAGE 32OZ", "Oat Beverage", {
-      package_size: "32 oz", price: 2.99, category: "Beverages", storage_location: "Fridge", confidence: 0.93,
+      package_size: "32 oz", total_price: 2.99, category: "Beverages", storage_location: "Fridge", confidence: 0.93,
     }),
     item("TANGERINES 2LB BAG", "Tangerines", {
-      package_size: "2 lb", price: 3.49, category: "Produce", storage_location: "Produce", confidence: 0.97,
+      package_size: "2 lb", total_price: 3.49, category: "Produce", storage_location: "Produce", confidence: 0.97,
     }),
     item("CREAMY TOMATO BASIL 32OZ", "Creamy Tomato Basil Soup", {
-      package_size: "32 oz", price: 3.99, category: "Pantry", storage_location: "Pantry", confidence: 0.82,
+      package_size: "32 oz", total_price: 3.99, category: "Pantry", storage_location: "Pantry", confidence: 0.82,
       uncertain_reason: "Line does not say whether this is soup or pasta sauce.",
     }),
     item("BRKFST CHKN SAUSAGE BURRITO", "Breakfast Chicken Sausage Burrito", {
-      price: 2.99, category: "Frozen", storage_location: "Freezer", confidence: 0.92,
+      total_price: 2.99, category: "Frozen", storage_location: "Freezer", confidence: 0.92,
     }),
     item("COLBY JACK CHEESE 16OZ", "Colby Jack Cheese", {
-      package_size: "16 oz", price: 4.49, category: "Dairy", storage_location: "Fridge", confidence: 0.97,
+      package_size: "16 oz", total_price: 4.49, category: "Dairy", storage_location: "Fridge", confidence: 0.97,
     }),
     item("PROVOLONE SLICED 8OZ", "Sliced Provolone", {
-      package_size: "8 oz", price: 2.99, category: "Dairy", storage_location: "Fridge", confidence: 0.96,
+      package_size: "8 oz", total_price: 2.99, category: "Dairy", storage_location: "Fridge", confidence: 0.96,
     }),
     item("ENG CHEDDAR CARML ONION 7OZ", "English Cheddar with Caramelized Onion", {
-      package_size: "7 oz", price: 3.99, category: "Dairy", storage_location: "Fridge", confidence: 0.9,
+      package_size: "7 oz", total_price: 3.99, category: "Dairy", storage_location: "Fridge", confidence: 0.9,
     }),
     item("PINEAPPLE WHOLE EA", "Pineapple", {
-      price: 3.49, category: "Produce", storage_location: "Produce", confidence: 0.97,
+      total_price: 3.49, category: "Produce", storage_location: "Produce", confidence: 0.97,
     }),
     item("BTRNT SQ MAC & CHEESE 12OZ", "Butternut Squash Mac & Cheese", {
-      package_size: "12 oz", price: 4.99, category: "Frozen", storage_location: "Freezer", confidence: 0.88,
+      package_size: "12 oz", total_price: 4.99, category: "Frozen", storage_location: "Freezer", confidence: 0.88,
     }),
     item("ONIONS RED ORG 2 LB", "Organic Red Onions", {
-      package_size: "2 lb", price: 3.29, category: "Produce", storage_location: "Pantry", confidence: 0.98,
+      package_size: "2 lb", total_price: 3.29, category: "Produce", storage_location: "Pantry", confidence: 0.98,
     }),
     item("BLUEBERRIES 18OZ", "Blueberries", {
-      package_size: "18 oz", price: 4.99, category: "Produce", storage_location: "Fridge", confidence: 0.97,
+      package_size: "18 oz", total_price: 4.99, category: "Produce", storage_location: "Fridge", confidence: 0.97,
     }),
     item("TOMATO BASIL MARINARA 25OZ", "Tomato Basil Marinara", {
-      package_size: "25 oz", price: 2.29, category: "Pantry", storage_location: "Pantry", confidence: 0.96,
+      package_size: "25 oz", total_price: 2.29, category: "Pantry", storage_location: "Pantry", confidence: 0.96,
     }),
     item("ORG BLACK TEA CONCENTRATE", "Organic Black Tea Concentrate", {
-      price: 3.99, category: "Beverages", storage_location: "Fridge", confidence: 0.9,
+      total_price: 3.99, category: "Beverages", storage_location: "Fridge", confidence: 0.9,
     }),
     item("PERSIAN CUCUMBERS 1LB", "Persian Cucumbers", {
-      package_size: "1 lb", price: 2.49, category: "Produce", storage_location: "Fridge", confidence: 0.97,
+      package_size: "1 lb", total_price: 2.49, category: "Produce", storage_location: "Fridge", confidence: 0.97,
     }),
     item("YELLOW SQUASH EA", "Yellow Squash", {
-      price: 0.99, category: "Produce", storage_location: "Produce", confidence: 0.96,
+      total_price: 0.99, category: "Produce", storage_location: "Produce", confidence: 0.96,
     }),
     item("YELLOW SQUASH EA", "Yellow Squash", {
-      price: 0.99, category: "Produce", storage_location: "Produce", confidence: 0.96,
+      total_price: 0.99, category: "Produce", storage_location: "Produce", confidence: 0.96,
     }),
     item("OLIVES KALAMATA PITTED 6OZ", "Pitted Kalamata Olives", {
-      package_size: "6 oz", price: 3.49, category: "Pantry", storage_location: "Pantry", confidence: 0.95,
+      package_size: "6 oz", total_price: 3.49, category: "Pantry", storage_location: "Pantry", confidence: 0.95,
     }),
     item("ENGLISH MUFFINS 6CT", "English Muffins", {
-      package_size: "6 ct", price: 2.29, category: "Bakery", storage_location: "Pantry", confidence: 0.97,
+      package_size: "6 ct", total_price: 2.29, category: "Bakery", storage_location: "Pantry", confidence: 0.97,
     }),
     item("PEARS BOSC EA", "Bosc Pears", {
-      price: 0.79, category: "Produce", storage_location: "Produce", confidence: 0.96,
+      total_price: 0.79, category: "Produce", storage_location: "Produce", confidence: 0.96,
     }),
     item("SPAGHETTI SQUASH EA", "Spaghetti Squash", {
-      price: 2.99, category: "Produce", storage_location: "Produce", confidence: 0.96,
+      total_price: 2.99, category: "Produce", storage_location: "Produce", confidence: 0.96,
     }),
     item("HERB GOAT LOG 8OZ", "Herbed Goat Cheese", {
-      package_size: "8 oz", price: 3.99, category: "Dairy", storage_location: "Fridge", confidence: 0.64,
+      package_size: "8 oz", total_price: 3.99, category: "Dairy", storage_location: "Fridge", confidence: 0.64,
       uncertain_reason: "Abbreviated line; 'log' is a shape, not a product type.",
     }),
     // Price column smudged on the paper — the parser must not invent a number.
     item("ORG BABY SPINACH 16OZ", "Organic Baby Spinach", {
-      package_size: "16 oz", price: null, category: "Produce", storage_location: "Fridge", confidence: 0.94,
+      package_size: "16 oz", total_price: null, category: "Produce", storage_location: "Fridge", confidence: 0.94,
     }),
     item("HAND SANITIZER TJS 8OZ", "Hand Sanitizer", {
-      package_size: "8 oz", price: 2.99, category: "Household", storage_location: "Pantry",
+      package_size: "8 oz", total_price: 2.99, category: "Household", storage_location: "Pantry",
       classification: "non_food", confidence: 0.98,
     }),
     item("DOG FOOD LAMB & RICE 13OZ", "Lamb and Rice Canned Dog Food", {
-      package_size: "13 oz", price: 1.79, category: "Pet", storage_location: "Pantry",
+      package_size: "13 oz", total_price: 1.79, category: "Pet", storage_location: "Pantry",
       classification: "pet_food", confidence: 0.97,
     }),
   ],

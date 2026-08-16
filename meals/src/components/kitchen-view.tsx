@@ -290,7 +290,7 @@ export function KitchenView({
 
       <p className="px-5 pb-10 text-meta text-ink-faint">
         Storage: {config.storage === "supabase" ? "Supabase" : "local dev store"} · Receipt parser:{" "}
-        {config.parser === "openai" ? "OpenAI vision" : "offline fixture"}
+        {config.parser === "openai" ? "OpenAI vision" : "mock fixture"}
       </p>
     </>
   );

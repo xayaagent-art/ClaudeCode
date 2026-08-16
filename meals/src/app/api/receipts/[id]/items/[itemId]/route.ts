@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { getDb } from "@/lib/db";
 import { fail, handle, readJson } from "@/lib/http";
+import { learnFromCorrection } from "@/lib/receipt/service";
 
 export const runtime = "nodejs";
 
@@ -16,7 +17,7 @@ const patchSchema = z.object({
 });
 
 export async function PATCH(request: Request, { params }: Ctx) {
-  const { itemId } = await params;
+  const { id: receiptId, itemId } = await params;
   const body = await readJson<unknown>(request);
   const parsed = patchSchema.safeParse(body);
   if (!parsed.success) return fail("That change isn't valid.", 400);
@@ -28,6 +29,20 @@ export async function PATCH(request: Request, { params }: Ctx) {
       patch.confidence = 1;
       patch.notes = null;
     }
-    return getDb().updateReceiptItem(itemId, patch);
+    const db = getDb();
+    const before = (await db.listReceiptItems(receiptId)).find((i) => i.id === itemId);
+    const updated = await db.updateReceiptItem(itemId, patch);
+
+    // A rename or reclassification teaches the store mapping table, so the same
+    // abbreviation resolves itself on the next receipt from this merchant.
+    if (before) {
+      await learnFromCorrection(receiptId, before, {
+        normalized_name: parsed.data.normalized_name,
+        category: parsed.data.category,
+        storage_location: parsed.data.storage_location,
+        classification: parsed.data.classification,
+      });
+    }
+    return updated;
   });
 }

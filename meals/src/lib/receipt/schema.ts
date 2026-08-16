@@ -16,7 +16,10 @@ export const parsedReceiptItemSchema = z.object({
   normalized_name: z.string().min(1),
   quantity: z.number().positive().max(99),
   package_size: z.string().nullable(),
-  price: z.number().nullable(),
+  /** Per-unit price when the receipt prints one, else null. */
+  unit_price: z.number().nullable(),
+  /** Line total actually charged. `price` is kept as its alias for storage. */
+  total_price: z.number().nullable(),
   category: z.string(),
   storage_location: storageLocationSchema,
   classification: classificationSchema,
@@ -66,7 +69,8 @@ export const receiptJsonSchema = {
           "normalized_name",
           "quantity",
           "package_size",
-          "price",
+          "unit_price",
+          "total_price",
           "category",
           "storage_location",
           "classification",
@@ -87,7 +91,14 @@ export const receiptJsonSchema = {
             type: ["string", "null"],
             description: "Package size if printed, e.g. '2 lb', '16 oz'.",
           },
-          price: { type: ["number", "null"], description: "Line price, null if not legible." },
+          unit_price: {
+            type: ["number", "null"],
+            description: "Price per unit if the receipt prints one, otherwise null.",
+          },
+          total_price: {
+            type: ["number", "null"],
+            description: "Total charged for this line. Null if not legible — never estimate it.",
+          },
           category: {
             type: "string",
             description:

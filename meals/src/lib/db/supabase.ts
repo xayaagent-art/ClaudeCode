@@ -14,6 +14,8 @@ import type {
   Member,
   NutritionProfile,
   PreferenceSignal,
+  ProductMapping,
+  ReceiptTelemetry,
   Receipt,
   ReceiptItem,
   Recipe,
@@ -408,6 +410,67 @@ class SupabaseDatabase implements Database {
         .limit(limit),
       "list signals",
     ) as unknown as PreferenceSignal[];
+  }
+
+  async listMappings(): Promise<ProductMapping[]> {
+    return unwrap(
+      await this.db.from("product_mappings").select("*").eq("household_id", HOUSEHOLD_ID),
+      "list product mappings",
+    ) as unknown as ProductMapping[];
+  }
+
+  async upsertMapping(
+    mapping: Omit<ProductMapping, "id" | "household_id" | "created_at" | "updated_at" | "times_seen">,
+  ): Promise<ProductMapping> {
+    // times_seen is incremented by the on-conflict trigger in migration 0003, so
+    // repeated corrections strengthen a mapping instead of resetting it.
+    const { data, error } = await this.db.rpc("upsert_product_mapping", {
+      p_household_id: HOUSEHOLD_ID,
+      p_merchant: mapping.merchant,
+      p_raw_name: mapping.raw_name,
+      p_normalized_name: mapping.normalized_name,
+      p_category: mapping.category,
+      p_storage_location: mapping.storage_location,
+      p_classification: mapping.classification,
+      p_confidence: mapping.confidence,
+      p_source: mapping.source,
+    });
+    if (error) throw new Error(`upsert product mapping: ${error.message}`);
+    return data as unknown as ProductMapping;
+  }
+
+  async addTelemetry(
+    entry: Omit<ReceiptTelemetry, "id" | "household_id" | "created_at">,
+  ): Promise<void> {
+    const { error } = await this.db
+      .from("receipt_telemetry")
+      .insert({ ...entry, household_id: HOUSEHOLD_ID });
+    // Telemetry must never break a receipt import.
+    if (error) console.error("[telemetry] insert failed:", error.message);
+  }
+
+  async listTelemetry(limit = 50): Promise<ReceiptTelemetry[]> {
+    return unwrap(
+      await this.db
+        .from("receipt_telemetry")
+        .select("*")
+        .eq("household_id", HOUSEHOLD_ID)
+        .order("created_at", { ascending: false })
+        .limit(limit),
+      "list telemetry",
+    ) as unknown as ReceiptTelemetry[];
+  }
+
+  async findReceiptByHash(imageHash: string): Promise<Receipt | null> {
+    const { data } = await this.db
+      .from("receipts")
+      .select("*")
+      .eq("household_id", HOUSEHOLD_ID)
+      .eq("image_hash", imageHash)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    return (data as unknown as Receipt) ?? null;
   }
 
   async savePlan(plan: Omit<WeeklyPlan, "id" | "household_id" | "created_at">): Promise<WeeklyPlan> {

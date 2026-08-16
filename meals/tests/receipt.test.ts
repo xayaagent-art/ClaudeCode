@@ -37,7 +37,7 @@ describe("receipt parsing contract", () => {
 
   it("tolerates a line with no legible price", () => {
     const spinach = itemNamed("ORG BABY SPINACH 16OZ");
-    expect(spinach.price).toBeNull();
+    expect(spinach.total_price).toBeNull();
     // A smudged price must not drag down confidence in the product itself.
     expect(spinach.classification).toBe("human_food");
   });
@@ -108,7 +108,8 @@ describe("receipt classification", () => {
           normalized_name: "Lemon Dish Soap",
           quantity: 1,
           package_size: "16 oz",
-          price: 3.49,
+          unit_price: null,
+          total_price: 3.49,
           category: "Pantry",
           storage_location: "Pantry",
           classification: "human_food",
@@ -130,7 +131,8 @@ describe("receipt classification", () => {
           normalized_name: "Mystery Box",
           quantity: 1,
           package_size: null,
-          price: 1,
+          unit_price: null,
+          total_price: 1,
           category: "Other",
           storage_location: "Pantry",
           classification: "non_food",

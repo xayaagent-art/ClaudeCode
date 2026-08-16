@@ -1,7 +1,7 @@
 import { getDb } from "@/lib/db";
 import { daysToExpiry, todayISO } from "@/lib/date";
 import { supabaseConfigured } from "@/lib/db/supabase";
-import { activeParser } from "@/lib/receipt/parse";
+import { activeProviderName } from "@/lib/ai";
 import { KitchenView } from "@/components/kitchen-view";
 
 export const dynamic = "force-dynamic";
@@ -29,7 +29,7 @@ export default async function KitchenPage() {
       }))}
       config={{
         storage: supabaseConfigured() ? "supabase" : "local",
-        parser: activeParser(),
+        parser: activeProviderName(),
       }}
     />
   );

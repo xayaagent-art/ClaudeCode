@@ -76,6 +76,8 @@ export interface Receipt {
   tax: number | null;
   total: number | null;
   image_path: string | null;
+  /** sha256 of the uploaded bytes, so the same photo is recognised. */
+  image_hash: string | null;
   processing_status: ReceiptStatus;
   parser: "openai" | "fixture" | null;
   error_message: string | null;
@@ -89,6 +91,9 @@ export interface ReceiptItem {
   normalized_name: string;
   quantity: number;
   package_size: string | null;
+  /** Per-unit price when printed. */
+  unit_price: number | null;
+  /** Line total. Kept as `price` for storage compatibility with 0001. */
   price: number | null;
   category: string;
   storage_location: StorageLocation;
@@ -337,4 +342,51 @@ export interface HouseholdContext {
   recent_meals: { recipe_id: string; title: string; cuisine: string; days_ago: number }[];
   use_soon: { name: string; days_to_expiry: number }[];
   feedback: { recipe_id: string; cuisine: string | null; rating: FeedbackRating }[];
+}
+
+/**
+ * Store-specific product mapping learned from corrections.
+ *
+ * "HERB GOAT LOG" at Trader Joe's means Herbed Goat Cheese. Once a human has
+ * confirmed that, the app should never ask again — and should never spend a
+ * model call on it either.
+ */
+export interface ProductMapping {
+  id: string;
+  household_id: string;
+  /** Normalised merchant key, e.g. "trader joes". Null = applies to any store. */
+  merchant: string | null;
+  /** The raw receipt line, upper-cased and whitespace-collapsed. */
+  raw_name: string;
+  normalized_name: string;
+  category: string | null;
+  storage_location: StorageLocation | null;
+  classification: Classification;
+  confidence: number;
+  /** Whether a human confirmed this, as opposed to it being model output. */
+  source: "user_correction" | "model";
+  times_seen: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** One row per real receipt parse, for cost and quality tracking. */
+export interface ReceiptTelemetry {
+  id: string;
+  household_id: string;
+  receipt_id: string | null;
+  provider: string;
+  model: string;
+  latency_ms: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  total_tokens: number | null;
+  estimated_cost_usd: number | null;
+  item_count: number;
+  high_confidence_count: number;
+  needs_review_count: number;
+  excluded_count: number;
+  success: boolean;
+  error_kind: string | null;
+  created_at: string;
 }

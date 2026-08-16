@@ -16,6 +16,8 @@ import type {
   Member,
   NutritionProfile,
   PreferenceSignal,
+  ProductMapping,
+  ReceiptTelemetry,
   Receipt,
   ReceiptItem,
   Recipe,
@@ -36,6 +38,8 @@ interface Snapshot {
   plans: WeeklyPlan[];
   /** Optional so snapshots written before signals existed still load. */
   signals?: PreferenceSignal[];
+  mappings?: ProductMapping[];
+  telemetry?: ReceiptTelemetry[];
 }
 
 function dbPath(): string {
@@ -85,6 +89,8 @@ function emptySnapshot(): Snapshot {
     feedback: [],
     plans: [],
     signals: [],
+    mappings: [],
+    telemetry: [],
   };
 }
 
@@ -384,6 +390,62 @@ class LocalDatabase implements Database {
 
   async listSignals(limit = 100): Promise<PreferenceSignal[]> {
     return structuredClone(((await this.load()).signals ?? []).slice(0, limit));
+  }
+
+  async listMappings(): Promise<ProductMapping[]> {
+    return structuredClone((await this.load()).mappings ?? []);
+  }
+
+  async upsertMapping(
+    mapping: Omit<ProductMapping, "id" | "household_id" | "created_at" | "updated_at" | "times_seen">,
+  ): Promise<ProductMapping> {
+    return this.mutate((s) => {
+      s.mappings ??= [];
+      const now = new Date().toISOString();
+      const existing = s.mappings.find(
+        (m) => m.merchant === mapping.merchant && m.raw_name === mapping.raw_name,
+      );
+      if (existing) {
+        Object.assign(existing, mapping, {
+          times_seen: existing.times_seen + 1,
+          updated_at: now,
+        });
+        return structuredClone(existing);
+      }
+      const created: ProductMapping = {
+        ...mapping,
+        id: randomUUID(),
+        household_id: HOUSEHOLD_ID,
+        times_seen: 1,
+        created_at: now,
+        updated_at: now,
+      };
+      s.mappings.push(created);
+      return structuredClone(created);
+    });
+  }
+
+  async addTelemetry(
+    entry: Omit<ReceiptTelemetry, "id" | "household_id" | "created_at">,
+  ): Promise<void> {
+    await this.mutate((s) => {
+      s.telemetry ??= [];
+      s.telemetry.unshift({
+        ...entry,
+        id: randomUUID(),
+        household_id: HOUSEHOLD_ID,
+        created_at: new Date().toISOString(),
+      });
+      s.telemetry = s.telemetry.slice(0, 200);
+    });
+  }
+
+  async listTelemetry(limit = 50): Promise<ReceiptTelemetry[]> {
+    return structuredClone(((await this.load()).telemetry ?? []).slice(0, limit));
+  }
+
+  async findReceiptByHash(imageHash: string): Promise<Receipt | null> {
+    return (await this.load()).receipts.find((r) => r.image_hash === imageHash) ?? null;
   }
 
   async savePlan(plan: Omit<WeeklyPlan, "id" | "household_id" | "created_at">): Promise<WeeklyPlan> {

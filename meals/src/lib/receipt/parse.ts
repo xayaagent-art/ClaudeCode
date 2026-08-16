@@ -1,19 +1,17 @@
 import "server-only";
-import { aiEnabled, structuredResponse, type ImageInput } from "@/lib/ai/openai";
-import {
-  RECEIPT_SYSTEM_PROMPT,
-  parsedReceiptSchema,
-  receiptJsonSchema,
-  type ParsedReceipt,
-} from "@/lib/receipt/schema";
-import { postProcess } from "@/lib/receipt/normalize";
-import { fixtureParsedReceipt } from "@/fixtures/trader-joes-receipt";
+import { createHash } from "node:crypto";
+import { AIConfigurationError, activeProviderName, getAIProvider } from "@/lib/ai";
+import type { AIUsage, ImageInput } from "@/lib/ai";
+import type { ParsedReceipt } from "@/lib/receipt/schema";
 
 export type ParserKind = "openai" | "fixture";
 
 export interface ParseOutcome {
   receipt: ParsedReceipt;
   parser: ParserKind;
+  model: string;
+  usage: AIUsage | null;
+  latency_ms: number;
   /** Non-fatal problems worth telling the user about. */
   warnings: string[];
 }
@@ -28,73 +26,47 @@ export class ReceiptParseError extends Error {
   }
 }
 
-/** Which parser will run, given the current configuration. */
+/**
+ * Which parser will run. `fixture` is only ever returned in mock mode — the
+ * "no key, quietly use the fixture" behaviour from the first milestone is gone.
+ */
 export function activeParser(): ParserKind {
-  const forced = process.env.RECEIPT_PARSER;
-  if (forced === "fixture") return "fixture";
-  if (forced === "openai") return "openai";
-  return aiEnabled() ? "openai" : "fixture";
+  return activeProviderName() === "openai" ? "openai" : "fixture";
 }
 
-const USER_PROMPT = `Transcribe this grocery receipt.
-
-Return every purchasable product line. Preserve raw_name exactly as printed.
-Classify each line: human_food, non_food, pet_food, or uncertain.
-If a price or a whole line is illegible, say so with a low confidence and an
-uncertain_reason rather than guessing a product.`;
+/** Stable identity for an uploaded image, so the same photo is recognised. */
+export function hashImage(bytes: Buffer): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
 
 /**
- * Parse a receipt image.
+ * Parse a receipt image through the active AI provider.
  *
- * With OPENAI_API_KEY set this runs the real vision pipeline. Without it, the
- * built-in Trader Joe's fixture is returned so the rest of the loop stays
- * exercisable offline — the result is labelled `fixture` all the way to the UI
- * so nobody mistakes it for a reading of their own receipt.
+ * In real mode a failure is a failure: it throws a recoverable error the UI can
+ * offer a retry for. It never degrades to fixture data — that would be a silent
+ * lie about what the user just photographed.
  */
 export async function parseReceiptImage(image: ImageInput): Promise<ParseOutcome> {
-  if (activeParser() === "fixture") {
-    return {
-      receipt: postProcess(fixtureParsedReceipt),
-      parser: "fixture",
-      warnings: [
-        "Offline demo parser: this is the bundled Trader Joe's fixture, not a reading of your image. Set OPENAI_API_KEY to parse real receipts.",
-      ],
-    };
-  }
+  const provider = getAIProvider();
+  const startedAt = Date.now();
 
-  let raw: unknown;
   try {
-    raw = await structuredResponse<unknown>({
-      system: RECEIPT_SYSTEM_PROMPT,
-      prompt: USER_PROMPT,
-      schemaName: "parsed_receipt",
-      schema: receiptJsonSchema as unknown as Record<string, unknown>,
-      image,
-      maxOutputTokens: 8000,
-    });
+    const result = await provider.parseReceipt(image);
+    return {
+      receipt: result.receipt,
+      parser: provider.name === "openai" ? "openai" : "fixture",
+      model: result.model,
+      usage: result.usage,
+      latency_ms: Date.now() - startedAt,
+      warnings: result.warnings,
+    };
   } catch (error) {
+    if (error instanceof AIConfigurationError) {
+      throw new ReceiptParseError(error.message, error.userMessage);
+    }
     throw new ReceiptParseError(
-      `receipt vision call failed: ${(error as Error).message}`,
-      "We couldn't read that receipt. Try a straighter, better-lit photo of the whole receipt.",
+      `receipt parse failed (${provider.name}/${provider.modelName()}): ${(error as Error).message}`,
+      "We couldn't read this receipt. Try again, or choose another photo.",
     );
   }
-
-  const validated = parsedReceiptSchema.safeParse(raw);
-  if (!validated.success) {
-    throw new ReceiptParseError(
-      `receipt failed schema validation: ${validated.error.issues.map((i) => i.path.join(".")).join(", ")}`,
-      "That receipt came back in a shape we couldn't use. Try scanning it again.",
-    );
-  }
-
-  const receipt = postProcess(validated.data);
-  const warnings: string[] = [];
-  if (receipt.items.length === 0) {
-    warnings.push("No product lines were found on this receipt.");
-  }
-  if (receipt.total === null) {
-    warnings.push("The total wasn't legible, so it hasn't been recorded.");
-  }
-
-  return { receipt, parser: "openai", warnings };
 }

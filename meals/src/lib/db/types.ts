@@ -9,6 +9,8 @@ import type {
   Member,
   NutritionProfile,
   PreferenceSignal,
+  ProductMapping,
+  ReceiptTelemetry,
   Receipt,
   ReceiptItem,
   Recipe,
@@ -65,6 +67,19 @@ export interface Database {
 
   addSignal(signal: Omit<PreferenceSignal, "id" | "household_id" | "created_at">): Promise<void>;
   listSignals(limit?: number): Promise<PreferenceSignal[]>;
+
+  /** Store-specific product mappings learned from corrections. */
+  listMappings(): Promise<ProductMapping[]>;
+  upsertMapping(
+    mapping: Omit<ProductMapping, "id" | "household_id" | "created_at" | "updated_at" | "times_seen">,
+  ): Promise<ProductMapping>;
+
+  /** One row per real receipt parse: provider, cost, latency, outcome. */
+  addTelemetry(entry: Omit<ReceiptTelemetry, "id" | "household_id" | "created_at">): Promise<void>;
+  listTelemetry(limit?: number): Promise<ReceiptTelemetry[]>;
+
+  /** Recognise a receipt image we have already processed. */
+  findReceiptByHash(imageHash: string): Promise<Receipt | null>;
 
   savePlan(plan: Omit<WeeklyPlan, "id" | "household_id" | "created_at">): Promise<WeeklyPlan>;
   getCurrentPlan(startDate: string): Promise<WeeklyPlan | null>;

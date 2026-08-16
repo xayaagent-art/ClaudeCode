@@ -34,6 +34,8 @@ export async function POST(request: Request) {
       items: result.items,
       parser: result.parser,
       warnings: result.warnings,
+      duplicate_of: result.duplicate_of,
+      mappings_applied: result.mappings_applied,
       counts: {
         food: buckets.ready.length + buckets.review.length,
         ready: buckets.ready.length,

@@ -43,7 +43,8 @@ With no environment configured the app still runs end to end:
 | Missing | What happens instead |
 | --- | --- |
 | `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` | A JSON store under `.data/`, seeded with the Mehta household |
-| `OPENAI_API_KEY` | Receipt scanning returns the bundled Trader Joe's fixture, clearly labelled in the UI as the offline demo parser |
+| `AI_PROVIDER` | Defaults to `mock` (bundled fixtures). Set `openai` for real receipt parsing |
+| `OPENAI_API_KEY` | With `AI_PROVIDER=openai` and no key, scanning fails with a retryable error — it never falls back to fixture data |
 | `YOUTUBE_API_KEY` | No cooking videos are looked up. Recipes show written steps and the UI says videos aren't set up — it never invents a link |
 | `FDC_API_KEY` | Nutrition enrichment uses a built-in generic table, labelled "generic estimate" |
 
@@ -129,12 +130,33 @@ always carry a text label too.
 
 ---
 
+## Modes
+
+One switch, `AI_PROVIDER`, decides whether the app talks to real models. The two
+modes never blend.
+
+| | `AI_PROVIDER=mock` | `AI_PROVIDER=openai` |
+| --- | --- | --- |
+| Receipt parsing | bundled fixture, labelled in the UI | real multimodal parse of your photo |
+| Parse failure | n/a | recoverable error with Try again — **never** fixture data |
+| Cost | none | one image + ~2–4k output tokens per receipt |
+| Persistence | local JSON store, or Supabase if configured | Supabase when configured |
+
+Unset defaults to `mock`, or to `openai` when `OPENAI_API_KEY` is present.
+
+---
+
 ## Supabase setup
 
 1. Create a project.
-2. Run `supabase/migrations/0001_init.sql` (SQL editor, or `supabase db push`).
-   It creates the schema, a **private** `receipts` storage bucket, and enables
-   RLS on every table.
+2. Run the migrations in order (SQL editor, or `supabase db push`):
+   - `0001_init.sql` — schema, private `receipts` bucket, RLS on every table
+   - `0002_recipe_sources.sql` — recipe source/video fields, preference signals
+   - `0003_real_receipts.sql` — image hashing, product mappings, parse telemetry
+
+   All three are additive and idempotent (`add column if not exists`,
+   `create table if not exists`), so re-running them is safe and no existing
+   data is dropped.
 3. Run `supabase/seed.sql` for the household and profiles.
 4. Put `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in `.env.local`.
 5. `npm run seed` to add the starter inventory (dates are relative to today,
@@ -247,6 +269,36 @@ a regression fixture only — the parser is not written around those strings, an
 the behaviours the tests pin down are general.
 
 ---
+
+## Store-specific learning
+
+Receipts repeat. The same household buys the same abbreviated lines from the
+same shops, so before trusting a model's normalisation the pipeline checks
+`product_mappings` for a known answer.
+
+- **Lookup order:** merchant-scoped mapping → store-agnostic mapping → model output.
+- **Trust:** a user correction is authoritative immediately. A model-derived
+  mapping only becomes trusted at confidence ≥ 0.9 after being seen twice.
+- **Learning:** renaming or reclassifying a line in Receipt Review writes a
+  mapping keyed on `(merchant, raw_name)`. The next receipt from that shop
+  resolves the line without a model call and without landing in Needs Review.
+
+Nothing is retailer-specific — the merchant is just a normalised key.
+
+## Cost control
+
+- The uploaded image is **hashed before anything else**. Re-uploading the same
+  photo returns the previous result instead of paying to parse it twice.
+- Known store mappings are applied after the parse, so corrections reduce future
+  review work rather than future spend on the same line.
+- No household history is sent with a receipt parse; the parser's job is to read
+  the paper.
+- `OPENAI_RECEIPT_MODEL` lets transcription run on a cheaper model than recipe
+  discovery.
+- Every real parse writes a `receipt_telemetry` row: provider, model, latency,
+  token counts, estimated cost, and the item/ready/review/excluded breakdown.
+  It stores **no prompt text and no image content** — only the error class name
+  on failure.
 
 ## Recipe discovery and the recipe experience
 
