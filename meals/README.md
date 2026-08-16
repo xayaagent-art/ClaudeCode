@@ -379,6 +379,52 @@ three library recipes clear the availability floor.
 
 ---
 
+## Inventory intelligence
+
+The household should not be maintaining a digital pantry by hand. The system
+keeps a *probabilistic* view of what is probably still there, and only asks when
+the answer would change something.
+
+**State is event-sourced.** `inventory_events` records every transition —
+`receipt_added`, `meal_consumed`, `restocked`, `manual_adjustment`, `marked_low`,
+`marked_out`, `expired`, `undo_meal`, `system_inference`, `user_confirmation` —
+so any status can be replayed and explained (`lib/kitchen/state.ts`).
+
+**Status carries confidence.** Users still see only Full / Some / Low / Out.
+Internally each item has a `status_confidence` and a `status_source`: watching
+something arrive on a receipt (0.95) is stronger than inferring it from a cooked
+meal (0.7), and a human confirmation (1.0) beats both. Confidence decays with a
+14-day half-life, because a guess from three weeks ago says little about today.
+
+**Freshness is an estimate, never a timestamp.** `lib/kitchen/freshness.ts`
+classifies products into broad food categories — leafy greens, berries, dairy,
+fresh meat, prepared chilled, bakery, frozen, canned, pantry staple — and says
+"Likely good for about 2 more days", not "Expires Tuesday at 4pm". Items past
+their window are "Probably past its best", and the system is deliberately
+conservative.
+
+**Restocks refill, they do not duplicate.** Buying spinach when spinach is Low
+returns that item to Full; buying it when there is plenty tops up the quantity.
+Two genuinely different products — Baby Spinach and Organic Baby Spinach — stay
+separate rows, because identity is canonical name *and* product name.
+
+**The household teaches the estimates.** `lib/kitchen/signals.ts` derives
+purchase frequency, average days-to-empty, repurchase interval, meal usage and
+waste from the event log. If this household always finishes yogurt in four days,
+the shelf-life estimate shortens. It never lengthens past the category default —
+optimism about freshness is the unsafe direction.
+
+**Asking is rationed.** `lib/kitchen/confirmations.ts` produces at most two
+questions and only for reasons that matter: a recommendation depends on
+uncertain stock, something is probably past its best, an inferred status has hit
+near-zero, or confidence has gone stale on a perishable. Routine check-ins on
+confident items are never generated, and nothing is re-asked within five days.
+
+Ranking consumes all of this: `available_high_confidence`, `available_uncertain`,
+`low` and `out` are distinct, low confidence discounts a match rather than
+erasing it, and use-soon boosts relevant recipes. Hard dietary filters are
+untouched by any of it.
+
 ## Inventory deduction
 
 Inventory is approximate on purpose: four states (Full → Some → Low → Out), no

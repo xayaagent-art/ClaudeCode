@@ -40,6 +40,18 @@ export function TodayView({ initial }: { initial: TodayPayload }) {
     router.push("/meals");
   }
 
+  // Answering a confirmation is the strongest signal the system can get, so it
+  // is a single tap and immediately re-renders everything that depended on it.
+  async function answer(itemId: string, status: string) {
+    await fetch(`/api/inventory/${itemId}/confirm`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    });
+    track("inventory_item_updated", { item_id: itemId, status, source: "confirmation" });
+    startTransition(() => router.refresh());
+  }
+
   async function undo(batchId: string) {
     await fetch("/api/meals/log/undo", {
       method: "POST",
@@ -183,6 +195,33 @@ export function TodayView({ initial }: { initial: TodayPayload }) {
         </>
       ) : null}
 
+      {initial.confirmations.length > 0 ? (
+        <>
+          <Divider />
+          <section className="py-8" aria-label="Quick check">
+            <ul className="space-y-4 px-5">
+              {initial.confirmations.map((prompt) => (
+                <li key={prompt.item_id} className="fade-rise">
+                  <p className="text-body">{prompt.question}</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {prompt.options.map((option) => (
+                      <Button
+                        key={option.label}
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => answer(prompt.item_id, option.status)}
+                      >
+                        {option.label}
+                      </Button>
+                    ))}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </section>
+        </>
+      ) : null}
+
       {initial.use_soon.length > 0 ? (
         <>
           <Divider />
@@ -202,13 +241,12 @@ export function TodayView({ initial }: { initial: TodayPayload }) {
                   key={item.id}
                   className="flex items-center justify-between gap-4 border-b border-line py-3 last:border-b-0"
                 >
-                  <span className="truncate text-body">{item.name}</span>
-                  <Pill tone={item.days !== null && item.days <= 1 ? "danger" : "warn"}>
-                    {item.days === null
-                      ? "soon"
-                      : item.days <= 0
-                        ? "today"
-                        : `${item.days} day${item.days === 1 ? "" : "s"}`}
+                  <span className="min-w-0">
+                    <span className="block truncate text-body">{item.name}</span>
+                    <span className="mt-0.5 block text-meta text-ink-muted">{item.label}</span>
+                  </span>
+                  <Pill tone={item.past_best ? "danger" : "warn"}>
+                    {item.past_best ? "check it" : "use soon"}
                   </Pill>
                 </li>
               ))}

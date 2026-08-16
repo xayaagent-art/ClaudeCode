@@ -16,10 +16,18 @@ export interface KitchenItem {
   status: InventoryStatus;
   quantity: number;
   package_size: string | null;
-  days_to_expiry: number | null;
   created_at: string;
   nutrition_source: NutritionSource | null;
   nutrition_confidence: ConfidenceBand | null;
+  /** Derived by lib/kitchen/state.ts — the item needs eating shortly. */
+  use_soon: boolean;
+  use_soon_score: number;
+  /** Plain-language estimate, e.g. "Likely good for about 2 more days". */
+  freshness_label: string;
+  likely_past_best: boolean;
+  confidence_band: "high" | "medium" | "low";
+  /** How we arrived at this state, shown when a row is expanded. */
+  explanation: string;
 }
 
 const FILTERS: (StorageLocation | "All")[] = ["All", "Fridge", "Pantry", "Freezer", "Produce"];
@@ -50,8 +58,15 @@ export function KitchenView({
   const useSoon = useMemo(
     () =>
       items
-        .filter((i) => i.status !== "out" && i.days_to_expiry !== null && i.days_to_expiry <= 4)
-        .sort((a, b) => (a.days_to_expiry ?? 0) - (b.days_to_expiry ?? 0)),
+        .filter((i) => i.status !== "out" && i.use_soon)
+        .sort((a, b) => b.use_soon_score - a.use_soon_score),
+    [items],
+  );
+
+  // Running low is a separate signal from freshness: plenty of shelf life left,
+  // but not much of it. Items already in Use soon are not repeated here.
+  const runningLow = useMemo(
+    () => items.filter((i) => i.status === "low" && !i.use_soon),
     [items],
   );
 
@@ -162,6 +177,24 @@ export function KitchenView({
                     item={item}
                     open={openItem === item.id}
                     onToggle={() => setOpenItem(openItem === item.id ? null : item.id)}
+                    onStatus={updateStatus}
+                    onRemove={removeItem}
+                  />
+                ))}
+              </ul>
+            </section>
+          ) : null}
+
+          {runningLow.length > 0 ? (
+            <section className="pb-8" aria-label="Running low">
+              <h2 className="px-5 pb-3 text-section font-semibold">Running low</h2>
+              <ul className="px-5">
+                {runningLow.map((item) => (
+                  <ItemRow
+                    key={item.id}
+                    item={item}
+                    open={openItem === `low-${item.id}`}
+                    onToggle={() => setOpenItem(openItem === `low-${item.id}` ? null : `low-${item.id}`)}
                     onStatus={updateStatus}
                     onRemove={removeItem}
                   />
@@ -326,9 +359,9 @@ function ItemRow({
           </span>
         </span>
         <span className="flex shrink-0 items-center gap-2">
-          {item.days_to_expiry !== null && item.days_to_expiry <= 4 && item.status !== "out" ? (
-            <Pill tone={item.days_to_expiry <= 1 ? "danger" : "warn"}>
-              {item.days_to_expiry <= 0 ? "today" : `${item.days_to_expiry}d`}
+          {item.use_soon && item.status !== "out" ? (
+            <Pill tone={item.likely_past_best ? "danger" : "warn"}>
+              {item.likely_past_best ? "check it" : "use soon"}
             </Pill>
           ) : null}
           <Pill tone={item.status === "out" ? "neutral" : item.status === "low" ? "warn" : "good"}>
@@ -339,10 +372,13 @@ function ItemRow({
 
       {open ? (
         <div className="stage-enter pb-4">
-          <p className="pb-2 text-meta text-ink-muted">
-            How much is left?
-            {item.raw_name ? ` · from receipt line “${item.raw_name}”` : ""}
+          <p className="pb-1 text-meta text-ink-muted">{item.explanation}</p>
+          <p className="pb-2 text-meta text-ink-faint">
+            {item.freshness_label}
+            {item.confidence_band !== "high" ? " · we're not certain of this" : ""}
+            {item.raw_name ? ` · from “${item.raw_name}”` : ""}
           </p>
+          <p className="pb-2 text-meta text-ink-muted">How much is left?</p>
           <div className="flex flex-wrap gap-2">
             {(["full", "some", "low", "out"] as InventoryStatus[]).map((status) => (
               <button

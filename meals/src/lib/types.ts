@@ -29,9 +29,13 @@ export type InventoryEventType =
   | "receipt_added"
   | "meal_consumed"
   | "manual_adjustment"
+  | "restocked"
   | "marked_low"
   | "marked_out"
-  | "undo_meal";
+  | "expired"
+  | "undo_meal"
+  | "system_inference"
+  | "user_confirmation";
 
 export interface Household {
   id: string;
@@ -124,11 +128,23 @@ export interface InventoryItem {
   protein_per_100g: number | null;
   serving_size: string | null;
   confidence: number;
+  /**
+   * How sure we are that `status` reflects reality, 0–1. Starts high after a
+   * receipt or a user confirmation and decays as the state becomes inferred
+   * rather than observed. Internal — the UI shows a band, not the number.
+   */
+  status_confidence: number;
+  /** Last time a human told us the true state, as opposed to us inferring it. */
+  last_confirmed_at: string | null;
+  /** How the current status was arrived at. */
+  status_source: InventoryStatusSource;
   receipt_item_id: string | null;
   receipt_id: string | null;
   created_at: string;
   updated_at: string;
 }
+
+export type InventoryStatusSource = "receipt" | "user" | "inferred" | "seed";
 
 /**
  * Where an item's nutrition numbers came from, most trustworthy first. Shown to

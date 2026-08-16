@@ -48,6 +48,10 @@ export async function POST(request: Request) {
         protein_per_100g: null,
         serving_size: null,
         confidence: 1,
+        // Typed in by hand, so this is a direct observation.
+        status_confidence: 1,
+        last_confirmed_at: new Date().toISOString(),
+        status_source: "user" as const,
         receipt_item_id: null,
         receipt_id: null,
       },

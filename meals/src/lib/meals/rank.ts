@@ -1,5 +1,6 @@
 import type { HouseholdContext, InventoryItem, RankingFactors, Recipe } from "@/lib/types";
 import { assessRecipe, canonicalName, type RecipeAvailability } from "@/lib/kitchen/match";
+import { currentConfidence } from "@/lib/kitchen/state";
 
 /**
  * Transparent weighted ranking.
@@ -207,9 +208,20 @@ export function scoreRecipe(
   today?: string,
 ): ScoredRecipe {
   const availability = assessRecipe(recipe, inventory, today);
+  // Low-confidence stock reduces how available a recipe really is: if we are
+  // only guessing that the paneer is there, the match is worth less.
+  const matched = availability.have.filter((entry) => entry.matched);
+  const meanConfidence =
+    matched.length === 0
+      ? 1
+      : matched.reduce((sum, entry) => sum + currentConfidence(entry.matched!, today), 0) /
+        matched.length;
+  // Halve the penalty: uncertainty discounts a match, it does not erase it.
+  const confidenceWeight = 0.5 + 0.5 * meanConfidence;
+
   const factors: RankingFactors = {
     nutrition_fit: nutritionFit(recipe, context),
-    inventory_fit: clamp01(availability.ratio),
+    inventory_fit: clamp01(availability.ratio * confidenceWeight),
     preference_fit: preferenceFit(recipe, context),
     expiry_priority: expiryPriority(availability, context),
     time_fit: timeFit(recipe, context),

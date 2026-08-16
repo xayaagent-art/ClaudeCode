@@ -12,6 +12,10 @@ import {
   needsReview,
 } from "@/lib/receipt/normalize";
 import { applyMappings, indexMappings, mappingFromCorrection } from "@/lib/receipt/mappings";
+import { decideRestock } from "@/lib/kitchen/restock";
+import { shelfLifeDays } from "@/lib/kitchen/freshness";
+import { adjustShelfLife, buildProductSignals } from "@/lib/kitchen/signals";
+import { canonicalName } from "@/lib/kitchen/match";
 import { storeReceiptImage } from "@/lib/receipt/storage";
 import type { Classification, Receipt, ReceiptItem, StorageLocation } from "@/lib/types";
 
@@ -172,6 +176,8 @@ export async function ingestReceipt(bytes: Buffer, mimeType: string): Promise<In
 export interface ConfirmResult {
   added: number;
   skipped: number;
+  /** Existing items refilled rather than duplicated. */
+  restocked: number;
 }
 
 /**
@@ -196,30 +202,86 @@ export async function confirmReceipt(receiptId: string): Promise<ConfirmResult> 
   const purchaseDate = receipt.purchase_date ?? todayISO();
   const merged = mergeForInventory(eligible);
 
-  const created = await db.addInventoryItems(
-    merged.map((item) => ({
-      normalized_name: item.normalized_name,
-      raw_name: item.raw_name,
-      category: item.category,
-      storage_location: item.storage_location,
-      quantity: item.quantity,
-      package_size: item.package_size,
-      status: "full" as const,
+  // Restock intelligence: buying spinach again when spinach is Low refills the
+  // item you have rather than creating a second "Spinach" row. Two genuinely
+  // different products keep separate rows.
+  const [existingInventory, existingEvents] = await Promise.all([
+    db.listInventory(),
+    db.listInventoryEvents(400),
+  ]);
+  const signals = buildProductSignals(existingInventory, existingEvents);
+
+  const toCreate: typeof merged = [];
+  let restocked = 0;
+
+  for (const item of merged) {
+    const decision = decideRestock(
+      {
+        normalized_name: item.normalized_name,
+        category: item.category,
+        package_size: item.package_size,
+        quantity: item.quantity,
+      },
+      existingInventory,
+    );
+
+    if (decision.kind === "new_product") {
+      toCreate.push(item);
+      continue;
+    }
+
+    const base = shelfLifeDays(item.normalized_name, item.storage_location, item.category);
+    const { days } = adjustShelfLife(base, signals.get(canonicalName(item.normalized_name)));
+
+    await db.updateInventoryItem(decision.target.id, {
+      status: decision.newStatus,
+      quantity: decision.target.quantity + item.quantity,
       purchase_date: purchaseDate,
-      estimated_expiry: addDays(
-        purchaseDate,
-        estimateShelfLifeDays(item.normalized_name, item.storage_location),
-      ),
-      nutrition_food_id: null,
-      nutrition_source: null,
-      nutrition_confidence: null,
-      calories_per_100g: null,
-      protein_per_100g: null,
-      serving_size: null,
-      confidence: item.confidence,
-      receipt_item_id: item.id,
-      receipt_id: receiptId,
-    })),
+      estimated_expiry: addDays(purchaseDate, days),
+      status_confidence: 0.95,
+      status_source: "receipt",
+      package_size: item.package_size ?? decision.target.package_size,
+    });
+
+    await db.addInventoryEvent({
+      inventory_item_id: decision.target.id,
+      event_type: "restocked",
+      from_status: decision.target.status,
+      to_status: decision.newStatus,
+      detail: `Restocked from ${receipt.merchant ?? "receipt"} — ${decision.reason}`,
+    });
+    restocked += 1;
+  }
+
+  const created = await db.addInventoryItems(
+    toCreate.map((item) => {
+      const base = shelfLifeDays(item.normalized_name, item.storage_location, item.category);
+      const { days } = adjustShelfLife(base, signals.get(canonicalName(item.normalized_name)));
+      return {
+        normalized_name: item.normalized_name,
+        raw_name: item.raw_name,
+        category: item.category,
+        storage_location: item.storage_location,
+        quantity: item.quantity,
+        package_size: item.package_size,
+        status: "full" as const,
+        purchase_date: purchaseDate,
+        estimated_expiry: addDays(purchaseDate, days),
+        nutrition_food_id: null,
+        nutrition_source: null,
+        nutrition_confidence: null,
+        calories_per_100g: null,
+        protein_per_100g: null,
+        serving_size: null,
+        confidence: item.confidence,
+        // Watching it come into the house is nearly as good as being told.
+        status_confidence: 0.95,
+        last_confirmed_at: null,
+        status_source: "receipt" as const,
+        receipt_item_id: item.id,
+        receipt_id: receiptId,
+      };
+    }),
   );
 
   for (const item of created) {
@@ -234,7 +296,7 @@ export async function confirmReceipt(receiptId: string): Promise<ConfirmResult> 
 
   await db.updateReceipt(receiptId, { processing_status: "confirmed" });
 
-  return { added: created.length, skipped: items.length - eligible.length };
+  return { added: created.length, restocked, skipped: items.length - eligible.length };
 }
 
 /**

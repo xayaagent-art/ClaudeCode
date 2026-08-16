@@ -1,7 +1,8 @@
 import "server-only";
 import { getDb } from "@/lib/db";
-import { daysToExpiry, todayISO } from "@/lib/date";
-import { useSoonItems } from "@/lib/kitchen/match";
+import { todayISO } from "@/lib/date";
+import { inspectAll } from "@/lib/kitchen/state";
+import { chooseConfirmations, type ConfirmationPrompt } from "@/lib/kitchen/confirmations";
 import { logsForDay, targetsFor, totalsFor } from "@/lib/nutrition/engine";
 import type { MealRecommendation } from "@/lib/types";
 
@@ -23,7 +24,9 @@ export interface TodayPayload {
     calories: number;
     protein: number;
   }[];
-  use_soon: { id: string; name: string; days: number | null }[];
+  use_soon: { id: string; name: string; label: string; past_best: boolean }[];
+  /** At most two questions, usually none. */
+  confirmations: ConfirmationPrompt[];
   inventory_count: number;
   latest_recommendation:
     | (Pick<MealRecommendation, "recipe_id" | "recommendation_reason" | "availability"> & {
@@ -40,12 +43,16 @@ export interface TodayPayload {
 /** Single source of truth for the Today screen, used by the page and the API. */
 export async function getTodayPayload(date = todayISO()): Promise<TodayPayload> {
   const db = getDb();
-  const [members, logs, inventory, recommendations] = await Promise.all([
+  const [members, logs, inventory, recommendations, events, recipes] = await Promise.all([
     db.listMembers(),
     db.listMealLogs(),
     db.listInventory(),
     db.listRecommendations(6),
+    db.listInventoryEvents(300),
+    db.listRecipes(),
   ]);
+
+  const insights = inspectAll(inventory, events, date);
 
   const todaysLogs = logsForDay(logs, date);
   const scopes = [
@@ -81,13 +88,25 @@ export async function getTodayPayload(date = todayISO()): Promise<TodayPayload> 
       calories: log.calories,
       protein: log.protein,
     })),
-    use_soon: useSoonItems(inventory, date)
+    use_soon: insights
+      .filter((insight) => insight.use_soon && insight.status !== "out")
+      .sort((a, b) => b.use_soon_score - a.use_soon_score)
       .slice(0, 5)
-      .map((item) => ({
-        id: item.id,
-        name: item.normalized_name,
-        days: daysToExpiry(item.estimated_expiry, date),
+      .map((insight) => ({
+        id: insight.item.id,
+        name: insight.item.normalized_name,
+        label: insight.freshness_label,
+        past_best: insight.likely_past_best,
       })),
+    confirmations: chooseConfirmations({
+      insights,
+      recommendationDependencies: recommendations.flatMap(
+        (rec) =>
+          recipes.find((r) => r.id === rec.recipe_id)?.ingredients.map((i) => i.ingredient_name) ??
+          [],
+      ),
+      today: date,
+    }),
     inventory_count: inventory.filter((i) => i.status !== "out").length,
     latest_recommendation:
       pending && recipe

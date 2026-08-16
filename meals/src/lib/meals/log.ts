@@ -61,7 +61,13 @@ export async function logMeal(input: LogMealInput): Promise<LogMealResult> {
   const changes: LogMealResult["inventory_changes"] = [];
   for (const decision of decisions) {
     if (decision.stepped) {
-      await db.updateInventoryItem(decision.item.id, { status: decision.to_status });
+      // A meal-derived status is inferred, not observed. Recording that keeps
+      // the confirmation engine able to tell a guess from a fact.
+      await db.updateInventoryItem(decision.item.id, {
+        status: decision.to_status,
+        status_confidence: 0.7,
+        status_source: "inferred",
+      });
     }
     await db.addInventoryEvent({
       inventory_item_id: decision.item.id,

@@ -1,5 +1,6 @@
 import { getDb } from "@/lib/db";
-import { daysToExpiry, todayISO } from "@/lib/date";
+import { todayISO } from "@/lib/date";
+import { inspectAll } from "@/lib/kitchen/state";
 import { supabaseConfigured } from "@/lib/db/supabase";
 import { activeProviderName } from "@/lib/ai";
 import { KitchenView } from "@/components/kitchen-view";
@@ -9,23 +10,29 @@ export const dynamic = "force-dynamic";
 export default async function KitchenPage() {
   const db = getDb();
   const today = todayISO();
-  const items = await db.listInventory();
+  const [items, events] = await Promise.all([db.listInventory(), db.listInventoryEvents(300)]);
+  const insights = inspectAll(items, events, today);
 
   return (
     <KitchenView
-      items={items.map((item) => ({
-        id: item.id,
-        name: item.normalized_name,
-        raw_name: item.raw_name,
-        category: item.category,
-        storage_location: item.storage_location,
-        status: item.status,
-        quantity: item.quantity,
-        package_size: item.package_size,
-        days_to_expiry: daysToExpiry(item.estimated_expiry, today),
-        created_at: item.created_at,
-        nutrition_source: item.nutrition_source,
-        nutrition_confidence: item.nutrition_confidence,
+      items={insights.map((insight) => ({
+        id: insight.item.id,
+        name: insight.item.normalized_name,
+        raw_name: insight.item.raw_name,
+        category: insight.item.category,
+        storage_location: insight.item.storage_location,
+        status: insight.status,
+        quantity: insight.item.quantity,
+        package_size: insight.item.package_size,
+        created_at: insight.item.created_at,
+        nutrition_source: insight.item.nutrition_source,
+        nutrition_confidence: insight.item.nutrition_confidence,
+        use_soon: insight.use_soon,
+        use_soon_score: insight.use_soon_score,
+        freshness_label: insight.freshness_label,
+        likely_past_best: insight.likely_past_best,
+        confidence_band: insight.band,
+        explanation: insight.explanation,
       }))}
       config={{
         storage: supabaseConfigured() ? "supabase" : "local",
