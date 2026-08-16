@@ -1,3 +1,4 @@
+import { canonicalName } from "@/lib/kitchen/match";
 import type { Recipe, RecipeIngredient } from "@/lib/types";
 
 /**
@@ -532,6 +533,7 @@ function buildIngredients(recipeId: string, list: IngredientSpec[]): RecipeIngre
     id: `${recipeId}-ing-${index}`,
     recipe_id: recipeId,
     ingredient_name: ing.name,
+    normalized_name: canonicalName(ing.name),
     quantity: ing.quantity ?? null,
     unit: ing.unit ?? null,
     optional: ing.optional ?? false,
@@ -553,6 +555,17 @@ export const catalogRecipes: Recipe[] = specs.map((spec) => ({
   dietary_tags: spec.tags,
   source_type: "catalog",
   source_url: null,
+  // Source and video fields start empty and are filled in by the discovery
+  // service on first use, then cached on the recipe. The instructions above are
+  // already our own writing, so these recipes need no external attribution.
+  source_name: null,
+  video_url: null,
+  video_platform: null,
+  thumbnail_url: null,
+  attribution: null,
+  source_quality: null,
+  discovered_at: null,
+  cooking_summary: null,
   instructions: spec.instructions,
   ingredients: buildIngredients(spec.id, spec.ingredients),
   created_at: "2026-08-01T00:00:00.000Z",

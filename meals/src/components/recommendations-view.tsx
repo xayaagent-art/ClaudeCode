@@ -16,6 +16,9 @@ interface Recommendation {
     image_url: string | null;
     source_type: string;
     source_url: string | null;
+    thumbnail_url: string | null;
+    video_url: string | null;
+    source_name: string | null;
   };
   reason: string;
   availability: number;
@@ -27,6 +30,8 @@ interface RecommendResponse {
   recommendations: Recommendation[];
   weak_match: boolean;
   discovery_used: boolean;
+  /** Set when videos could not be looked up, e.g. no YouTube key configured. */
+  source_note: string | null;
 }
 
 export function RecommendationsView() {
@@ -48,6 +53,16 @@ export function RecommendationsView() {
       if (!response.ok) throw new Error(body.error ?? "We couldn't put together suggestions.");
       setData(body);
       setState("ready");
+      // One "seen" signal per recommendation actually shown.
+      for (const [index, rec] of body.recommendations.entries()) {
+        track("recommendation_seen", {
+          recipe_id: rec.recipe.id,
+          cuisine: rec.recipe.cuisine,
+          rank: index + 1,
+          availability: rec.availability,
+          has_video: Boolean(rec.recipe.video_url),
+        });
+      }
     } catch (caught) {
       setError((caught as Error).message);
       setState("error");
@@ -103,6 +118,11 @@ export function RecommendationsView() {
             </div>
           ) : (
             <>
+              {data.source_note ? (
+                <p className="mx-5 mb-5 rounded-xl border border-line bg-surface-sunken px-4 py-3 text-meta text-ink-muted">
+                  Cooking videos aren&apos;t set up yet, so these show written steps only.
+                </p>
+              ) : null}
               {data.weak_match ? (
                 <p className="mx-5 mb-5 rounded-xl border border-warn/25 bg-warn-soft px-4 py-3 text-meta text-warn">
                   These are the closest matches, but each one needs a few things you don&apos;t have.
@@ -134,14 +154,19 @@ function RecommendationCard({ rec, rank }: { rec: Recommendation; rank: number }
         href={`/recipes/${rec.recipe.id}`}
         className="block"
         onClick={() =>
-          track("meal_recommendation_selected", { recipe_id: rec.recipe.id, rank })
+          track("meal_recommendation_selected", {
+            recipe_id: rec.recipe.id,
+            cuisine: rec.recipe.cuisine,
+            rank,
+            has_video: Boolean(rec.recipe.video_url),
+          })
         }
       >
         <div className="h-32 w-full">
           <RecipePlate
             title={rec.recipe.title}
             cuisine={rec.recipe.cuisine}
-            imageUrl={rec.recipe.image_url}
+            imageUrl={rec.recipe.thumbnail_url ?? rec.recipe.image_url}
           />
         </div>
         <div className="p-5">
@@ -162,7 +187,11 @@ function RecommendationCard({ rec, rank }: { rec: Recommendation; rank: number }
               {rec.missing.map((m) => m.name.toLowerCase()).join(", ")}
             </p>
           ) : null}
-          {rec.recipe.source_type !== "catalog" && rec.recipe.source_url ? (
+          {rec.recipe.video_url ? (
+            <p className="mt-2 text-meta text-ink-faint">
+              Video · {rec.recipe.source_name ?? hostOf(rec.recipe.video_url)}
+            </p>
+          ) : rec.recipe.source_type !== "catalog" && rec.recipe.source_url ? (
             <p className="mt-2 text-meta text-ink-faint">Adapted from {hostOf(rec.recipe.source_url)}</p>
           ) : null}
         </div>

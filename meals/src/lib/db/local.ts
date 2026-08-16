@@ -15,6 +15,7 @@ import type {
   MealRecommendation,
   Member,
   NutritionProfile,
+  PreferenceSignal,
   Receipt,
   ReceiptItem,
   Recipe,
@@ -33,6 +34,8 @@ interface Snapshot {
   meal_logs: MealLog[];
   feedback: MealFeedback[];
   plans: WeeklyPlan[];
+  /** Optional so snapshots written before signals existed still load. */
+  signals?: PreferenceSignal[];
 }
 
 function dbPath(): string {
@@ -81,6 +84,7 @@ function emptySnapshot(): Snapshot {
     meal_logs: [],
     feedback: [],
     plans: [],
+    signals: [],
   };
 }
 
@@ -361,6 +365,25 @@ class LocalDatabase implements Database {
 
   async listFeedback(): Promise<MealFeedback[]> {
     return structuredClone((await this.load()).feedback);
+  }
+
+  async addSignal(
+    signal: Omit<PreferenceSignal, "id" | "household_id" | "created_at">,
+  ): Promise<void> {
+    await this.mutate((s) => {
+      s.signals ??= [];
+      s.signals.unshift({
+        ...signal,
+        id: randomUUID(),
+        household_id: HOUSEHOLD_ID,
+        created_at: new Date().toISOString(),
+      });
+      s.signals = s.signals.slice(0, 500);
+    });
+  }
+
+  async listSignals(limit = 100): Promise<PreferenceSignal[]> {
+    return structuredClone(((await this.load()).signals ?? []).slice(0, limit));
   }
 
   async savePlan(plan: Omit<WeeklyPlan, "id" | "household_id" | "created_at">): Promise<WeeklyPlan> {

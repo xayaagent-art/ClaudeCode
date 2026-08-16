@@ -6,6 +6,8 @@ import type { MealType, Recipe } from "@/lib/types";
 
 export interface RecipeDetail {
   recipe: Recipe;
+  /** Why this dish was suggested, carried over from the recommendation. */
+  reason: string | null;
   portions: Portion[];
   availability: {
     ratio: number;
@@ -24,11 +26,21 @@ export async function getRecipeDetail(
   const recipe = await db.getRecipe(recipeId);
   if (!recipe) return null;
 
-  const [inventory, members] = await Promise.all([db.listInventory(), db.listMembers()]);
+  // Reads only. Opening a recipe must never trigger external discovery — the
+  // source was resolved when the recommendation was produced and cached on the
+  // recipe. Re-resolving is an explicit action (POST /api/recipes/[id]/source).
+  const [inventory, members, recommendations] = await Promise.all([
+    db.listInventory(),
+    db.listMembers(),
+    db.listRecommendations(12),
+  ]);
   const availability = assessRecipe(recipe, inventory);
+  const reason =
+    recommendations.find((rec) => rec.recipe_id === recipe.id)?.recommendation_reason ?? null;
 
   return {
     recipe,
+    reason: reason && reason.length > 0 ? reason : null,
     portions: portionsFor(recipe, members, mealType),
     availability: {
       ratio: Math.round(availability.ratio * 100) / 100,

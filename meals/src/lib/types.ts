@@ -154,11 +154,27 @@ export interface RecipeIngredient {
   id: string;
   recipe_id: string;
   ingredient_name: string;
+  /** Canonical form used for inventory matching; see kitchen/match.ts. */
+  normalized_name: string;
   quantity: number | null;
   unit: string | null;
   optional: boolean;
   /** Resolved at read time against current inventory, not persisted. */
   inventory_item_id?: string | null;
+}
+
+export type VideoPlatform = "youtube" | "other";
+
+/**
+ * Why a particular source was chosen. Kept internal and never rendered as a
+ * numeric score — users see the outcome, not a fabricated confidence number.
+ */
+export interface SourceQuality {
+  /** 0–1, internal only. */
+  score: number;
+  /** Human-readable factors, for debugging a bad pick after the fact. */
+  reasons: string[];
+  checked_at: string;
 }
 
 export interface Recipe {
@@ -176,6 +192,19 @@ export interface Recipe {
   dietary_tags: string[];
   source_type: RecipeSourceType;
   source_url: string | null;
+  /** Publisher or channel name, shown as attribution next to the link. */
+  source_name: string | null;
+  /** Watchable cooking video for this dish, when one has been found. */
+  video_url: string | null;
+  video_platform: VideoPlatform | null;
+  /** Real image from the chosen source. Null falls back to a typographic plate. */
+  thumbnail_url: string | null;
+  attribution: string | null;
+  source_quality: SourceQuality | null;
+  /** When the external source was last resolved; drives cache staleness. */
+  discovered_at: string | null;
+  /** Our own two-line description of the method, never the source's text. */
+  cooking_summary: string | null;
   instructions: string[];
   ingredients: RecipeIngredient[];
   created_at: string;
@@ -227,6 +256,31 @@ export interface MealFeedback {
   rating: FeedbackRating;
   cuisine: string | null;
   main_ingredients: string[];
+  created_at: string;
+}
+
+/**
+ * Household learning signals. Persisted now so preference learning has history
+ * to work from later; nothing reads them for ranking yet.
+ */
+export type PreferenceEvent =
+  | "recommendation_seen"
+  | "recommendation_selected"
+  | "recipe_viewed"
+  | "recipe_video_opened"
+  | "external_source_opened"
+  | "meal_logged"
+  | "recommendation_regenerated"
+  | "meal_disliked";
+
+export interface PreferenceSignal {
+  id: string;
+  household_id: string;
+  member_id: string | null;
+  event: PreferenceEvent;
+  recipe_id: string | null;
+  cuisine: string | null;
+  detail: Record<string, string | number | boolean | null>;
   created_at: string;
 }
 

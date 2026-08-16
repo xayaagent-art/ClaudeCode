@@ -3,6 +3,7 @@ import { getDb } from "@/lib/db";
 import { todayISO } from "@/lib/date";
 import { buildHouseholdContext } from "@/lib/household/context";
 import { discoverRecipes } from "@/lib/meals/discover";
+import { resolveSourcesFor } from "@/lib/meals/discovery-service";
 import { MIN_AVAILABILITY, rankRecipes, type ScoredRecipe } from "@/lib/meals/rank";
 import { portionsFor, type Portion } from "@/lib/nutrition/engine";
 import type { MealRecommendation, MealType, Recipe } from "@/lib/types";
@@ -24,6 +25,8 @@ export interface RecommendResult {
   /** Set when the kitchen is too thin to suggest anything genuinely cookable. */
   weak_match: boolean;
   discovery_used: boolean;
+  /** Plain-language note when videos could not be looked up, e.g. no API key. */
+  source_note: string | null;
 }
 
 /** No more than two of the same cuisine in one set of three. */
@@ -81,8 +84,20 @@ export async function recommendMeals(options: {
 
   const picked = diversify(scored, count);
 
+  // Resolve a real video/source for the three we are about to show — and only
+  // those three. Already-resolved recipes are served from cache, so a settled
+  // catalog costs no external calls at all.
+  const { recipes: withSources, outcomes } = await resolveSourcesFor(
+    picked.map((entry) => entry.recipe),
+    context,
+  );
+  const sourceById = new Map(withSources.map((recipe) => [recipe.id, recipe]));
+  const sourceIssue = outcomes.find(
+    (outcome) => outcome.outcome === "provider_unavailable",
+  )?.reason;
+
   const recommendations: Recommendation[] = picked.map((entry) => ({
-    recipe: entry.recipe,
+    recipe: sourceById.get(entry.recipe.id) ?? entry.recipe,
     score: Math.round(entry.score * 1000) / 1000,
     reason: entry.reason,
     availability: Math.round(entry.availability.ratio * 100) / 100,
@@ -119,5 +134,6 @@ export async function recommendMeals(options: {
     recommendations,
     weak_match: recommendations.every((r) => r.availability < MIN_AVAILABILITY),
     discovery_used: discoveryUsed,
+    source_note: sourceIssue ?? null,
   };
 }

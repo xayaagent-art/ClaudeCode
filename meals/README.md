@@ -16,8 +16,10 @@ social layer, no micronutrient dashboard, and no barcode scanning.
 - [Architecture](#architecture)
 - [Supabase setup](#supabase-setup)
 - [OpenAI setup](#openai-setup)
+- [YouTube setup](#youtube-setup)
 - [Nutrition data setup](#nutrition-data-setup)
 - [The receipt pipeline](#the-receipt-pipeline)
+- [Recipe discovery and the recipe experience](#recipe-discovery-and-the-recipe-experience)
 - [The recommendation pipeline](#the-recommendation-pipeline)
 - [Inventory deduction](#inventory-deduction)
 - [Weekly planning](#weekly-planning)
@@ -42,6 +44,7 @@ With no environment configured the app still runs end to end:
 | --- | --- |
 | `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` | A JSON store under `.data/`, seeded with the Mehta household |
 | `OPENAI_API_KEY` | Receipt scanning returns the bundled Trader Joe's fixture, clearly labelled in the UI as the offline demo parser |
+| `YOUTUBE_API_KEY` | No cooking videos are looked up. Recipes show written steps and the UI says videos aren't set up — it never invents a link |
 | `FDC_API_KEY` | Nutrition enrichment uses a built-in generic table, labelled "generic estimate" |
 
 The Kitchen and Settings screens both show which of these are live, so it is
@@ -50,7 +53,7 @@ never ambiguous what you are looking at.
 Other scripts:
 
 ```bash
-npm test              # 60 tests covering receipt, inventory, ranking, nutrition
+npm test              # 79 tests: receipt, inventory, ranking, nutrition, discovery
 npm run typecheck
 npm run build
 npm run seed          # seeds Supabase, or resets the local store
@@ -164,6 +167,27 @@ fail because an optional enhancement did.
 
 ---
 
+## YouTube setup
+
+Cooking videos come from the **YouTube Data API v3**.
+
+1. <https://console.cloud.google.com/> → create or select a project
+2. APIs & Services → Library → enable **YouTube Data API v3**
+3. APIs & Services → Credentials → **Create credentials → API key**
+4. Restrict the key to the YouTube Data API v3
+5. Put it in `.env.local` as `YOUTUBE_API_KEY`
+
+**Quota.** 10,000 units/day on the free tier, no billing required. `search.list`
+costs 100 units and the follow-up `videos.list` costs 1, so roughly 99 *new*
+dishes per day. Because a resolved source is cached on the recipe permanently,
+the built-in catalog costs about 18 searches in total and then nothing.
+
+Without the key the app degrades honestly: no video block, written steps
+expanded by default, and a line on the recommendations screen saying videos
+aren't set up. It never fabricates a link or a thumbnail.
+
+---
+
 ## Nutrition data setup
 
 Set `FDC_API_KEY` from [FoodData Central](https://fdc.nal.usda.gov/api-key-signup.html).
@@ -223,6 +247,51 @@ a regression fixture only — the parser is not written around those strings, an
 the behaviours the tests pin down are general.
 
 ---
+
+## Recipe discovery and the recipe experience
+
+A recommendation is only useful if you can actually cook it, so each of the
+three suggestions carries a real, watchable source.
+
+```
+recommendation picked → RecipeDiscoveryService
+    A. already-normalized catalog / saved recipe   ← free, no network
+    B. sources this household already cooked from  ← free, no network
+    C. trusted external video (YouTube)            ← costs quota, once per dish
+    D. adaptation of an existing recipe            ← discover.ts
+    E. generation                                  ← discover.ts
+→ source cached on the recipe → reused forever
+```
+
+**Cost control.** External search happens when a recommendation set is built, for
+those three recipes only, and never on a recipe view. A resolved source is
+written back onto the recipe row, so the 18-recipe catalog costs roughly 18
+searches in total and then nothing. Re-resolving is an explicit user action
+(`POST /api/recipes/[id]/source?force=true`).
+
+**Choosing the source.** `meals/source-quality.ts` is a deterministic heuristic —
+no model picks the video. It disqualifies outright on dietary conflict (a
+"…with Chicken" title for a household that doesn't eat chicken) and on dish
+mismatch, then scores title relevance, duration fit (a 45-second clip and a
+40-minute vlog are both wrong), cuisine mention, recipe framing, reach and
+thumbnail availability. The chosen source stores its `score` **and its
+reasons** on the recipe so a bad pick can be explained later. That score is
+internal: the UI never shows a fabricated quality number.
+
+**Video-first detail screen.** When a video exists the page leads with the real
+thumbnail, the recommendation reason, both members' portions, ingredients you
+have and are missing, then a Watch block with **Watch recipe** as the primary
+CTA and **View steps** as a secondary. Steps start collapsed so the page reads
+as "watch this", not as a recipe blog. With no video, steps are expanded by
+default and nothing about a video is shown.
+
+**Copyright.** No external article text is stored or displayed. The app keeps
+attribution, the source URL, structured ingredients, and its own concise steps,
+and links back to the original.
+
+**Images.** Priority is YouTube thumbnail → source-provided image → the
+typographic plate. Nothing is hotlinked from image search and no food photography
+is generated.
 
 ## The recommendation pipeline
 
@@ -302,7 +371,9 @@ Days can be swapped to leftovers or eating out from the Plan screen.
 | `POST /api/receipts/[id]/confirm` | Turn reviewed lines into inventory |
 | `POST /api/nutrition/enrich` | Stage-2 nutrition matching |
 | `GET`/`POST /api/inventory`, `PATCH`/`DELETE /api/inventory/[id]` | Kitchen CRUD |
-| `POST /api/meals/recommend` | Three ranked recommendations |
+| `POST /api/meals/recommend` | Three ranked recommendations, each with a resolved source |
+| `POST /api/recipes/[id]/source` | Explicitly (re)resolve a recipe's video source |
+| `GET`/`POST /api/signals` | Household preference signals |
 | `GET /api/recipes/[id]` | Recipe with availability and household portions |
 | `POST /api/meals/log`, `POST /api/meals/log/undo` | Log a meal, undo it |
 | `POST /api/meals/feedback` | Love it / Fine / Don't recommend |
@@ -369,9 +440,8 @@ Known and deliberate:
 
 - **No authentication.** One seeded household, service-role access from server
   routes. RLS policies are in place for when auth arrives.
-- **No recipe photography.** Recipes without a real image get a typographic
-  plate rather than a generated or borrowed photo. Discovered recipes can carry
-  an image URL; the built-in library has none.
+- **No invented recipe photography.** Images come from the chosen video source
+  or not at all; recipes without a resolved source get a typographic plate.
 - **Inventory is approximate** and always will be at this fidelity. There is no
   periodic "still have spinach?" prompt yet — the event log is the groundwork
   for it.
@@ -384,7 +454,12 @@ Known and deliberate:
   planning are not built.
 - **Analytics are fired but not delivered.** Events are defined in
   `lib/analytics.ts` and gated behind `NEXT_PUBLIC_ANALYTICS_ENABLED`; no
-  provider is connected.
+  provider is connected. Preference signals are separate and always persisted
+  to `preference_signals`, but nothing reads them for ranking yet.
+- **Videos need `YOUTUBE_API_KEY`.** Without it every recipe falls back to
+  written steps and a typographic plate, and the recommendations screen says so.
+- **Only YouTube is wired.** `lib/video/provider.ts` is provider-agnostic;
+  Instagram and recipe-site scraping are deliberately not built.
 - **The offline fixture parser returns the same receipt regardless of the image
   you upload.** It exists so the loop is exercisable without an API key and is
   labelled as such everywhere it appears.

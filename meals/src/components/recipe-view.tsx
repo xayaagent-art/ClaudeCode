@@ -19,10 +19,34 @@ export function RecipeView({ detail }: { detail: RecipeDetail }) {
   const [batchId, setBatchId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [feedbackGiven, setFeedbackGiven] = useState<string | null>(null);
+  // Steps stay collapsed when there is a video to cook along with, so the page
+  // reads as "watch this" rather than as a recipe blog.
+  const [stepsOpen, setStepsOpen] = useState(!recipe.video_url);
 
   useEffect(() => {
-    track("recipe_viewed", { recipe_id: recipe.id, source_type: recipe.source_type });
-  }, [recipe.id, recipe.source_type]);
+    track("recipe_viewed", {
+      recipe_id: recipe.id,
+      cuisine: recipe.cuisine,
+      source_type: recipe.source_type,
+      has_video: Boolean(recipe.video_url),
+    });
+  }, [recipe.id, recipe.cuisine, recipe.source_type, recipe.video_url]);
+
+  function openedVideo() {
+    track("recipe_video_opened", {
+      recipe_id: recipe.id,
+      cuisine: recipe.cuisine,
+      platform: recipe.video_platform,
+    });
+  }
+
+  function openedSource() {
+    track("external_source_opened", {
+      recipe_id: recipe.id,
+      cuisine: recipe.cuisine,
+      source: recipe.source_name,
+    });
+  }
 
   async function ateThis() {
     setPhase("logging");
@@ -41,7 +65,7 @@ export function RecipeView({ detail }: { detail: RecipeDetail }) {
       if (!response.ok || !body.batch_id) throw new Error(body.error ?? "We couldn't log that.");
       setBatchId(body.batch_id);
       setPhase("logged");
-      track("meal_logged", { recipe_id: recipe.id });
+      track("meal_logged", { recipe_id: recipe.id, cuisine: recipe.cuisine });
       router.refresh();
     } catch (caught) {
       setError((caught as Error).message);
@@ -66,6 +90,9 @@ export function RecipeView({ detail }: { detail: RecipeDetail }) {
   async function sendFeedback(rating: "love" | "fine" | "never") {
     setFeedbackGiven(rating);
     track("meal_feedback_submitted", { recipe_id: recipe.id, rating });
+    if (rating === "never") {
+      track("meal_disliked", { recipe_id: recipe.id, cuisine: recipe.cuisine });
+    }
     await fetch("/api/meals/feedback", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -83,7 +110,11 @@ export function RecipeView({ detail }: { detail: RecipeDetail }) {
   return (
     <>
       <div className="relative h-52 w-full md:h-64">
-        <RecipePlate title={recipe.title} cuisine={recipe.cuisine} imageUrl={recipe.image_url} />
+        <RecipePlate
+          title={recipe.title}
+          cuisine={recipe.cuisine}
+          imageUrl={recipe.thumbnail_url ?? recipe.image_url}
+        />
         <Link
           href="/meals"
           className="absolute left-4 top-4 inline-flex min-h-11 items-center rounded-full bg-ground/90 px-4 text-meta font-medium text-ink backdrop-blur"
@@ -98,21 +129,10 @@ export function RecipeView({ detail }: { detail: RecipeDetail }) {
           {recipe.cuisine} · {recipe.total_time_minutes} min ·{" "}
           {Math.round(availability.ratio * 100)}% of ingredients on hand
         </p>
-        {recipe.description ? (
+        {detail.reason ? (
+          <p className="mt-3 text-body">{detail.reason}</p>
+        ) : recipe.description ? (
           <p className="mt-3 text-body text-ink-muted">{recipe.description}</p>
-        ) : null}
-        {recipe.source_url ? (
-          <p className="mt-2 text-meta text-ink-faint">
-            Adapted from{" "}
-            <a
-              href={recipe.source_url}
-              target="_blank"
-              rel="noreferrer noopener"
-              className="underline"
-            >
-              the original recipe
-            </a>
-          </p>
         ) : null}
       </header>
 
@@ -203,19 +223,96 @@ export function RecipeView({ detail }: { detail: RecipeDetail }) {
 
       <Divider />
 
-      <section className="py-8" aria-label="Method">
-        <SectionHeading>Method</SectionHeading>
-        <ol className="space-y-4 px-5">
-          {recipe.instructions.map((step, index) => (
-            <li key={index} className="flex gap-4">
-              <span className="tabular mt-0.5 w-5 shrink-0 text-meta text-ink-faint">
-                {index + 1}
+      {recipe.video_url ? (
+        <section className="py-8" aria-label="Watch">
+          <SectionHeading>Watch</SectionHeading>
+          <div className="px-5">
+            <a
+              href={recipe.video_url}
+              target="_blank"
+              rel="noreferrer noopener"
+              onClick={openedVideo}
+              className="block overflow-hidden rounded-[18px] border border-line bg-surface"
+            >
+              <span className="relative block h-44 w-full">
+                <RecipePlate
+                  title={recipe.title}
+                  cuisine={recipe.cuisine}
+                  imageUrl={recipe.thumbnail_url}
+                />
+                <span
+                  aria-hidden="true"
+                  className="absolute inset-0 flex items-center justify-center"
+                >
+                  <span className="flex size-14 items-center justify-center rounded-full bg-ink/70 backdrop-blur-sm">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+                      <path d="M8 5.5v13l11-6.5L8 5.5Z" fill="white" />
+                    </svg>
+                  </span>
+                </span>
               </span>
-              <p className="text-body">{step}</p>
-            </li>
-          ))}
-        </ol>
-      </section>
+              {recipe.attribution ? (
+                <span className="block px-4 py-3 text-meta text-ink-muted">
+                  {recipe.attribution}
+                </span>
+              ) : null}
+            </a>
+
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <a
+                href={recipe.video_url}
+                target="_blank"
+                rel="noreferrer noopener"
+                onClick={openedVideo}
+                className="inline-flex min-h-11 items-center justify-center rounded-full bg-accent px-6 text-body font-medium text-white transition-colors hover:bg-accent-ink"
+              >
+                Watch recipe
+              </a>
+              <Button variant="secondary" onClick={() => setStepsOpen((v) => !v)}>
+                {stepsOpen ? "Hide steps" : "View steps"}
+              </Button>
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      {recipe.source_url && recipe.source_url !== recipe.video_url ? (
+        <p className="px-5 pb-6 text-meta text-ink-faint">
+          {recipe.attribution ?? "Adapted from"}{" "}
+          <a
+            href={recipe.source_url}
+            target="_blank"
+            rel="noreferrer noopener"
+            onClick={openedSource}
+            className="underline"
+          >
+            {recipe.source_name ?? "the original recipe"}
+          </a>
+        </p>
+      ) : null}
+
+      {recipe.video_url ? <Divider /> : null}
+
+      {stepsOpen ? (
+        <section className="py-8" aria-label="Steps">
+          <SectionHeading>Steps</SectionHeading>
+          <ol className="space-y-4 px-5">
+            {recipe.instructions.map((step, index) => (
+              <li key={index} className="flex gap-4">
+                <span className="tabular mt-0.5 w-5 shrink-0 text-meta text-ink-faint">
+                  {index + 1}
+                </span>
+                <p className="text-body">{step}</p>
+              </li>
+            ))}
+          </ol>
+          {recipe.source_url ? (
+            <p className="px-5 pt-5 text-meta text-ink-faint">
+              Summarised in our own words. Follow the link above for the full original.
+            </p>
+          ) : null}
+        </section>
+      ) : null}
 
       {error ? <ErrorNote>{error}</ErrorNote> : null}
 

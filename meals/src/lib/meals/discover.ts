@@ -1,6 +1,7 @@
 import "server-only";
 import { z } from "zod";
 import { aiEnabled, structuredResponse } from "@/lib/ai/openai";
+import { canonicalName } from "@/lib/kitchen/match";
 import type { HouseholdContext, Recipe } from "@/lib/types";
 
 /**
@@ -123,17 +124,38 @@ function toRecipe(input: z.infer<typeof discoveredRecipeSchema>, index: number):
     dietary_tags: input.dietary_tags,
     source_type: input.source_type,
     source_url: input.source_url,
+    source_name: input.source_url ? hostOf(input.source_url) : null,
+    // A video is attached later by the discovery service, not by the model —
+    // asking a model for a video URL invites hallucinated links.
+    video_url: null,
+    video_platform: null,
+    thumbnail_url: null,
+    attribution: input.source_url ? `Adapted from ${hostOf(input.source_url)}` : null,
+    source_quality: null,
+    discovered_at: new Date().toISOString(),
+    // Our own summary, which is what we display instead of the source's prose.
+    cooking_summary: input.description,
     instructions: input.instructions,
     ingredients: input.ingredients.map((ing, i) => ({
       id: `${id}-ing-${i}`,
       recipe_id: id,
       ingredient_name: ing.ingredient_name,
+      normalized_name: canonicalName(ing.ingredient_name),
       quantity: ing.quantity,
       unit: ing.unit,
       optional: ing.optional,
     })),
     created_at: new Date().toISOString(),
   };
+}
+
+/** Publisher name for attribution, derived from the URL rather than trusted from the model. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "the original source";
+  }
 }
 
 /**

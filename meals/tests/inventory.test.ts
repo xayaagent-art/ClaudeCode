@@ -169,7 +169,15 @@ describe("availability", () => {
       {
         ...palakPaneer,
         ingredients: [
-          { id: "a", recipe_id: "r", ingredient_name: "Salt", quantity: 1, unit: "tsp", optional: false },
+          {
+            id: "a",
+            recipe_id: "r",
+            ingredient_name: "Salt",
+            normalized_name: "salt",
+            quantity: 1,
+            unit: "tsp",
+            optional: false,
+          },
         ],
       },
       [],

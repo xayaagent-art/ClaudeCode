@@ -13,6 +13,7 @@ import type {
   MealRecommendation,
   Member,
   NutritionProfile,
+  PreferenceSignal,
   Receipt,
   ReceiptItem,
   Recipe,
@@ -88,6 +89,14 @@ function toRecipe(row: Row, ingredients: RecipeIngredient[]): Recipe {
     dietary_tags: (row.dietary_tags as string[]) ?? [],
     source_type: row.source_type as Recipe["source_type"],
     source_url: (row.source_url as string | null) ?? null,
+    source_name: (row.source_name as string | null) ?? null,
+    video_url: (row.video_url as string | null) ?? null,
+    video_platform: (row.video_platform as Recipe["video_platform"]) ?? null,
+    thumbnail_url: (row.thumbnail_url as string | null) ?? null,
+    attribution: (row.attribution as string | null) ?? null,
+    source_quality: (row.source_quality as Recipe["source_quality"]) ?? null,
+    discovered_at: (row.discovered_at as string | null) ?? null,
+    cooking_summary: (row.cooking_summary as string | null) ?? null,
     instructions: (row.instructions as string[]) ?? [],
     ingredients,
     created_at: row.created_at as string,
@@ -377,6 +386,28 @@ class SupabaseDatabase implements Database {
         .order("created_at", { ascending: false }),
       "list feedback",
     ) as unknown as MealFeedback[];
+  }
+
+  async addSignal(
+    signal: Omit<PreferenceSignal, "id" | "household_id" | "created_at">,
+  ): Promise<void> {
+    const { error } = await this.db
+      .from("preference_signals")
+      .insert({ ...signal, household_id: HOUSEHOLD_ID });
+    // Signals are telemetry, not state — a failure must never break the flow.
+    if (error) console.error("[signals] insert failed:", error.message);
+  }
+
+  async listSignals(limit = 100): Promise<PreferenceSignal[]> {
+    return unwrap(
+      await this.db
+        .from("preference_signals")
+        .select("*")
+        .eq("household_id", HOUSEHOLD_ID)
+        .order("created_at", { ascending: false })
+        .limit(limit),
+      "list signals",
+    ) as unknown as PreferenceSignal[];
   }
 
   async savePlan(plan: Omit<WeeklyPlan, "id" | "household_id" | "created_at">): Promise<WeeklyPlan> {

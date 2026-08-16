@@ -8,6 +8,7 @@ import type {
   MealRecommendation,
   Member,
   NutritionProfile,
+  PreferenceSignal,
   Receipt,
   ReceiptItem,
   Recipe,
@@ -61,6 +62,9 @@ export interface Database {
 
   addFeedback(feedback: Omit<MealFeedback, "id" | "household_id" | "created_at">): Promise<void>;
   listFeedback(): Promise<MealFeedback[]>;
+
+  addSignal(signal: Omit<PreferenceSignal, "id" | "household_id" | "created_at">): Promise<void>;
+  listSignals(limit?: number): Promise<PreferenceSignal[]>;
 
   savePlan(plan: Omit<WeeklyPlan, "id" | "household_id" | "created_at">): Promise<WeeklyPlan>;
   getCurrentPlan(startDate: string): Promise<WeeklyPlan | null>;
