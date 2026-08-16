@@ -1,0 +1,107 @@
+import "server-only";
+import { getDb } from "@/lib/db";
+import { daysToExpiry, todayISO } from "@/lib/date";
+import { useSoonItems } from "@/lib/kitchen/match";
+import { logsForDay, targetsFor, totalsFor } from "@/lib/nutrition/engine";
+import type { MealRecommendation } from "@/lib/types";
+
+export interface TodayPayload {
+  date: string;
+  members: { id: string; name: string; calorie_target: number; protein_target: number }[];
+  progress: {
+    scope: string;
+    name: string;
+    consumed: { calories: number; protein: number };
+    target: { calories: number; protein: number };
+  }[];
+  meals_today: {
+    batch_id: string;
+    recipe_id: string;
+    title: string;
+    member_id: string;
+    meal_type: string;
+    calories: number;
+    protein: number;
+  }[];
+  use_soon: { id: string; name: string; days: number | null }[];
+  inventory_count: number;
+  latest_recommendation:
+    | (Pick<MealRecommendation, "recipe_id" | "recommendation_reason" | "availability"> & {
+        title: string;
+        cuisine: string;
+        total_time_minutes: number;
+        protein_per_serving: number;
+        calories_per_serving: number;
+        image_url: string | null;
+      })
+    | null;
+}
+
+/** Single source of truth for the Today screen, used by the page and the API. */
+export async function getTodayPayload(date = todayISO()): Promise<TodayPayload> {
+  const db = getDb();
+  const [members, logs, inventory, recommendations] = await Promise.all([
+    db.listMembers(),
+    db.listMealLogs(),
+    db.listInventory(),
+    db.listRecommendations(6),
+  ]);
+
+  const todaysLogs = logsForDay(logs, date);
+  const scopes = [
+    { id: null as string | null, name: "Household" },
+    ...members.map((m) => ({ id: m.id as string | null, name: m.name })),
+  ];
+
+  // The headline suggestion is the most recent one the household has not eaten yet.
+  const eatenToday = new Set(todaysLogs.map((log) => log.recipe_id));
+  const pending = recommendations.find((rec) => !eatenToday.has(rec.recipe_id));
+  const recipe = pending ? await db.getRecipe(pending.recipe_id) : null;
+
+  return {
+    date,
+    members: members.map((m) => ({
+      id: m.id,
+      name: m.name,
+      calorie_target: m.profile.calorie_target,
+      protein_target: m.profile.protein_target,
+    })),
+    progress: scopes.map((scope) => ({
+      scope: scope.id ?? "household",
+      name: scope.name,
+      consumed: totalsFor(todaysLogs, scope.id),
+      target: targetsFor(members, scope.id),
+    })),
+    meals_today: todaysLogs.map((log) => ({
+      batch_id: log.batch_id,
+      recipe_id: log.recipe_id,
+      title: log.recipe_title,
+      member_id: log.member_id,
+      meal_type: log.meal_type,
+      calories: log.calories,
+      protein: log.protein,
+    })),
+    use_soon: useSoonItems(inventory, date)
+      .slice(0, 5)
+      .map((item) => ({
+        id: item.id,
+        name: item.normalized_name,
+        days: daysToExpiry(item.estimated_expiry, date),
+      })),
+    inventory_count: inventory.filter((i) => i.status !== "out").length,
+    latest_recommendation:
+      pending && recipe
+        ? {
+            recipe_id: pending.recipe_id,
+            recommendation_reason: pending.recommendation_reason,
+            availability: pending.availability,
+            title: recipe.title,
+            cuisine: recipe.cuisine,
+            total_time_minutes: recipe.total_time_minutes,
+            protein_per_serving: recipe.protein_per_serving,
+            calories_per_serving: recipe.calories_per_serving,
+            image_url: recipe.image_url,
+          }
+        : null,
+  };
+}

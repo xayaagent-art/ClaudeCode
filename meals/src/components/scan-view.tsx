@@ -1,0 +1,192 @@
+"use client";
+
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useRef, useState } from "react";
+import { track } from "@/lib/analytics";
+import { Button, ErrorNote } from "@/components/ui";
+
+type StageId = "upload" | "read" | "items" | "match";
+type StageState = "pending" | "active" | "done";
+
+interface ParseResponse {
+  receipt: { id: string; merchant: string | null };
+  parser: "openai" | "fixture";
+  warnings: string[];
+  counts: { food: number; ready: number; review: number; excluded: number };
+  error?: string;
+}
+
+/**
+ * Every stage below corresponds to something that actually happened. Nothing
+ * animates a percentage the app cannot observe — a stage only completes when
+ * the server has told us the fact it describes.
+ */
+export function ScanView() {
+  const router = useRouter();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [stages, setStages] = useState<Record<StageId, StageState>>({
+    upload: "pending",
+    read: "pending",
+    items: "pending",
+    match: "pending",
+  });
+  const [labels, setLabels] = useState<Partial<Record<StageId, string>>>({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function setStage(id: StageId, state: StageState, label?: string) {
+    setStages((current) => ({ ...current, [id]: state }));
+    if (label) setLabels((current) => ({ ...current, [id]: label }));
+  }
+
+  async function onFile(file: File) {
+    setError(null);
+    setBusy(true);
+    track("receipt_scan_started", { size_bytes: file.size, type: file.type || "unknown" });
+
+    setStage("upload", "active");
+    const form = new FormData();
+    form.append("file", file);
+
+    try {
+      const response = await fetch("/api/receipts/parse", { method: "POST", body: form });
+      setStage("upload", "done", "Photo uploaded");
+      setStage("read", "active");
+
+      const body = (await response.json()) as ParseResponse;
+      if (!response.ok) throw new Error(body.error ?? "We couldn't read that receipt.");
+
+      setStage("read", "done", body.receipt.merchant ? `${body.receipt.merchant} detected` : "Receipt read");
+      setStage("items", "done", `${body.counts.food} food items found`);
+      setStage(
+        "match",
+        "done",
+        body.counts.review > 0
+          ? `${body.counts.review} need a quick look`
+          : "Everything matched cleanly",
+      );
+
+      track("receipt_scan_completed", {
+        receipt_id: body.receipt.id,
+        parser: body.parser,
+        items: body.counts.food,
+        needs_review: body.counts.review,
+      });
+
+      router.push(`/kitchen/review/${body.receipt.id}`);
+    } catch (caught) {
+      setError((caught as Error).message);
+      setStages({ upload: "pending", read: "pending", items: "pending", match: "pending" });
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <header className="flex items-start justify-between gap-4 px-5 pt-8 pb-6">
+        <div>
+          <p className="text-meta text-ink-muted">Kitchen</p>
+          <h1 className="mt-1 text-display font-semibold tracking-tight">Scan receipt</h1>
+        </div>
+        <Link href="/kitchen" className="min-h-11 self-center px-2 text-meta text-ink-muted hover:text-ink">
+          Cancel
+        </Link>
+      </header>
+
+      {busy ? (
+        <section className="px-5 py-6" aria-live="polite">
+          <h2 className="text-section font-semibold">Reading your receipt</h2>
+          <ul className="mt-5 space-y-3">
+            <Stage state={stages.upload} label={labels.upload ?? "Uploading photo"} />
+            <Stage state={stages.read} label={labels.read ?? "Reading the receipt"} />
+            <Stage state={stages.items} label={labels.items ?? "Finding items"} />
+            <Stage state={stages.match} label={labels.match ?? "Matching products"} />
+          </ul>
+          <p className="mt-6 text-meta text-ink-faint">
+            This usually takes under a minute. You can keep the app open.
+          </p>
+        </section>
+      ) : (
+        <section className="px-5">
+          <p className="text-body text-ink-muted">
+            Photograph the whole receipt, flat and in good light. We&apos;ll pull out the groceries,
+            leave out anything that isn&apos;t food, and let you check anything unclear before it
+            reaches your kitchen.
+          </p>
+
+          <div className="mt-8 space-y-3">
+            <Button
+              full
+              onClick={() => {
+                if (inputRef.current) {
+                  inputRef.current.setAttribute("capture", "environment");
+                  inputRef.current.click();
+                }
+              }}
+            >
+              Take photo
+            </Button>
+            <Button
+              full
+              variant="secondary"
+              onClick={() => {
+                if (inputRef.current) {
+                  inputRef.current.removeAttribute("capture");
+                  inputRef.current.click();
+                }
+              }}
+            >
+              Choose from library
+            </Button>
+          </div>
+
+          <input
+            ref={inputRef}
+            type="file"
+            accept="image/*"
+            className="sr-only"
+            aria-label="Receipt photo"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.target.value = "";
+              if (file) void onFile(file);
+            }}
+          />
+
+          <p className="mt-8 text-meta text-ink-faint">
+            Receipt photos are stored privately and can be deleted from the receipt at any time.
+          </p>
+        </section>
+      )}
+
+      {error ? (
+        <div className="pt-6">
+          <ErrorNote>{error}</ErrorNote>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function Stage({ state, label }: { state: StageState; label: string }) {
+  return (
+    <li className="flex items-center gap-3">
+      <span
+        aria-hidden="true"
+        className={`flex size-5 shrink-0 items-center justify-center rounded-full border text-[11px] ${
+          state === "done"
+            ? "border-accent bg-accent text-white"
+            : state === "active"
+              ? "pulse-soft border-accent text-accent"
+              : "border-line-strong text-transparent"
+        }`}
+      >
+        ✓
+      </span>
+      <span className={`text-body ${state === "pending" ? "text-ink-faint" : "text-ink"}`}>
+        {label}
+      </span>
+    </li>
+  );
+}

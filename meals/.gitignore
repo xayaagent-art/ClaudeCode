@@ -1,0 +1,19 @@
+node_modules/
+.next/
+out/
+build/
+.vercel/
+.turbo/
+
+# Local development store and uploaded receipt images — never commit these.
+.data/
+
+.env
+.env.local
+.env*.local
+
+*.tsbuildinfo
+next-env.d.ts
+
+.DS_Store
+*.log

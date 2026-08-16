@@ -1,0 +1,135 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens.
+ * Warm off-white ground, near-black text, one restrained green accent.
+ * Semantic colours are used sparingly and never as the only signal.
+ */
+@theme {
+  --color-ground: #fafaf7;
+  --color-surface: #ffffff;
+  --color-surface-sunken: #f2f2ed;
+  --color-ink: #171717;
+  --color-ink-muted: #6b6b66;
+  --color-ink-faint: #9a9a94;
+  --color-line: #e6e5df;
+  --color-line-strong: #d6d5cd;
+
+  --color-accent: #3f6b4e;
+  --color-accent-soft: #eaf0eb;
+  --color-accent-ink: #2c4d38;
+
+  --color-warn: #9a6212;
+  --color-warn-soft: #fbf1e0;
+  --color-danger: #9b3423;
+  --color-danger-soft: #fbeae7;
+  --color-good: #3f6b4e;
+  --color-good-soft: #eaf0eb;
+
+  --radius-card: 18px;
+
+  --font-sans: var(--font-app), ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+  --text-display: 30px;
+  --text-display--line-height: 36px;
+  --text-display--letter-spacing: -0.02em;
+  --text-title: 22px;
+  --text-title--line-height: 28px;
+  --text-title--letter-spacing: -0.015em;
+  --text-section: 18px;
+  --text-section--line-height: 24px;
+  --text-section--letter-spacing: -0.01em;
+  --text-body: 16px;
+  --text-body--line-height: 24px;
+  --text-meta: 13px;
+  --text-meta--line-height: 18px;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-ground);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    line-height: var(--text-body--line-height);
+    -webkit-font-smoothing: antialiased;
+    overscroll-behavior-y: none;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+
+  /* Numeric readouts should not jitter while animating. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer utilities {
+  .pad-safe-bottom {
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+  }
+
+  .stage-enter {
+    animation: stage-enter 220ms ease-out both;
+  }
+
+  .fade-rise {
+    animation: fade-rise 260ms ease-out both;
+  }
+
+  .pulse-soft {
+    animation: pulse-soft 1.6s ease-in-out infinite;
+  }
+}
+
+@keyframes stage-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fade-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes pulse-soft {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

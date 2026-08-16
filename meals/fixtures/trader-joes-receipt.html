@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Trader Joe's receipt fixture</title>
+    <style>
+      /*
+       * Source for the development receipt image. `npm run fixture:render`
+       * rasterises this to public/fixtures/trader-joes-receipt.png so the vision
+       * pipeline can be exercised against a real photograph-like input.
+       */
+      @page { margin: 0; }
+      body {
+        margin: 0;
+        background: #ffffff;
+        width: 420px;
+        padding: 28px 26px 40px;
+        font-family: "Courier New", Courier, monospace;
+        font-size: 15px;
+        line-height: 1.55;
+        color: #1b1b1b;
+      }
+      .center { text-align: center; }
+      .store { font-size: 20px; font-weight: 700; letter-spacing: 0.06em; }
+      .muted { color: #444; }
+      hr { border: 0; border-top: 1px dashed #9a9a9a; margin: 14px 0; }
+      .row { display: flex; justify-content: space-between; gap: 12px; }
+      .row span:first-child { white-space: nowrap; overflow: hidden; }
+      .smudge { color: #b9b9b9; letter-spacing: 0.1em; }
+      .totals { margin-top: 6px; }
+      .totals .row { font-weight: 700; }
+      .foot { margin-top: 22px; font-size: 13px; }
+    </style>
+  </head>
+  <body>
+    <div class="center">
+      <div class="store">TRADER JOE'S</div>
+      <div class="muted">STORE #178 &middot; SAN MATEO, CA</div>
+      <div class="muted">(650) 555-0142</div>
+    </div>
+    <hr />
+    <div class="row muted"><span>08/15/2026 18:42</span><span>REG 04 &middot; TRANS 1183</span></div>
+    <hr />
+
+    <div class="row"><span>TOMATO FETA SOUP 20OZ</span><span>3.99</span></div>
+    <div class="row"><span>VANILLA ICE CREAM 1PT</span><span>3.49</span></div>
+    <div class="row"><span>ORG VANILLA YOGURT 32OZ</span><span>4.29</span></div>
+    <div class="row"><span>OAT BEVERAGE 32OZ</span><span>2.99</span></div>
+    <div class="row"><span>TANGERINES 2LB BAG</span><span>3.49</span></div>
+    <div class="row"><span>CREAMY TOMATO BASIL 32OZ</span><span>3.99</span></div>
+    <div class="row"><span>BRKFST CHKN SAUSAGE BURRITO</span><span>2.99</span></div>
+    <div class="row"><span>COLBY JACK CHEESE 16OZ</span><span>4.49</span></div>
+    <div class="row"><span>PROVOLONE SLICED 8OZ</span><span>2.99</span></div>
+    <div class="row"><span>ENG CHEDDAR CARML ONION 7OZ</span><span>3.99</span></div>
+    <div class="row"><span>PINEAPPLE WHOLE EA</span><span>3.49</span></div>
+    <div class="row"><span>BTRNT SQ MAC &amp; CHEESE 12OZ</span><span>4.99</span></div>
+    <div class="row"><span>ONIONS RED ORG 2 LB</span><span>3.29</span></div>
+    <div class="row"><span>BLUEBERRIES 18OZ</span><span>4.99</span></div>
+    <div class="row"><span>TOMATO BASIL MARINARA 25OZ</span><span>2.29</span></div>
+    <div class="row"><span>ORG BLACK TEA CONCENTRATE</span><span>3.99</span></div>
+    <div class="row"><span>PERSIAN CUCUMBERS 1LB</span><span>2.49</span></div>
+    <div class="row"><span>YELLOW SQUASH EA</span><span>0.99</span></div>
+    <div class="row"><span>YELLOW SQUASH EA</span><span>0.99</span></div>
+    <div class="row"><span>OLIVES KALAMATA PITTED 6OZ</span><span>3.49</span></div>
+    <div class="row"><span>ENGLISH MUFFINS 6CT</span><span>2.29</span></div>
+    <div class="row"><span>PEARS BOSC EA</span><span>0.79</span></div>
+    <div class="row"><span>SPAGHETTI SQUASH EA</span><span>2.99</span></div>
+    <div class="row"><span>HERB GOAT LOG 8OZ</span><span>3.99</span></div>
+    <div class="row"><span>ORG BABY SPINACH 16OZ</span><span class="smudge">&#9608;&#9608;&#9608;&#9608;</span></div>
+    <div class="row"><span>HAND SANITIZER TJS 8OZ</span><span>2.99</span></div>
+    <div class="row"><span>DOG FOOD LAMB &amp; RICE 13OZ</span><span>1.79</span></div>
+    <div class="row"><span>BAG FEE</span><span>0.10</span></div>
+
+    <hr />
+    <div class="totals">
+      <div class="row muted"><span>SUBTOTAL</span><span>79.62</span></div>
+      <div class="row muted"><span>TAX</span><span>1.42</span></div>
+      <div class="row"><span>TOTAL</span><span>81.04</span></div>
+      <div class="row muted"><span>VISA ************4417</span><span>81.04</span></div>
+    </div>
+    <hr />
+    <div class="center foot muted">
+      ITEMS SOLD 28<br />
+      THANK YOU FOR SHOPPING WITH US
+    </div>
+  </body>
+</html>
