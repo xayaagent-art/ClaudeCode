@@ -105,9 +105,20 @@ answer to whether a retry is worth offering:
 | How to validate | Set the key, tap **Find a meal**, open a recommendation. A real thumbnail and a **Watch recipe** button should appear, with channel attribution |
 | Without it | No video block, written steps expanded by default, and the recommendations screen says videos aren't set up. No link or thumbnail is ever invented |
 
-**Verified reachable:** `www.googleapis.com/youtube/v3/search` responds
-`PERMISSION_DENIED: Method doesn't allow unregistered callers` — the wiring is
-correct and only the key is missing.
+**Status: key configured in Vercel Preview.** Settings reports
+`Cooking videos: YouTube (live)` when the provider can be called.
+
+**Quota behaviour worth knowing.** Nothing is searched on a page load. Only
+`POST /api/meals/recommend` (Find a meal) and `POST /api/recipes/:id/source`
+(Find a different video) can spend quota, and the first resolves sources for
+exactly the three recipes it is about to show. A resolved source is written back
+onto the recipe, so re-opening a dish — any number of times — costs zero.
+
+**Not yet exercised against the live key.** The sandbox this was built in cannot
+reach `*.vercel.app` (the egress proxy refuses CONNECT) and the two quota-spending
+routes are POST, so no live search has been made from here. Everything below the
+network boundary is covered by tests using payloads shaped like real YouTube
+results; the first real call happens when someone taps **Find a meal**.
 
 ---
 
