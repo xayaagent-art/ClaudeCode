@@ -517,11 +517,29 @@ treats everything after "with" as a modifier.
 
 ## Deployment
 
-Vercel:
+**Canonical Vercel project: `household-meal-intelligence`.**
 
-1. Import the repo, set the root directory to `meals/`.
-2. Add the environment variables from `.env.example` (all server-side).
-3. Deploy. `npm run build` is the build command; no extra configuration needed.
+| | |
+| --- | --- |
+| Repository | `xayaagent-art/ClaudeCode` |
+| Root directory | `meals` |
+| Framework | Next.js (auto-detected) |
+| Supabase project | `meal-intelligence` (`mrsnfrrpfldgayqdgesp`) |
+
+Required server-side variables, in **both** Production and Preview:
+
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+
+Vercel scopes environment variables per environment. Branch pushes build as
+**Preview**, so variables added only to Production will not reach them — the
+deployment will return 503 with the two variable names until Preview has them
+too.
+
+**A deployed build will not fall back to local JSON.** The local store writes to
+`/tmp`, which on serverless is per-instance and vanishes between requests, so
+`getDb()` throws `PersistenceNotConfiguredError` rather than pretending to
+persist. Set `ALLOW_LOCAL_DB=true` only to run a production build locally.
 
 The app is installable: `public/manifest.webmanifest`, maskable icons, standalone
 display, and shortcuts to Scan receipt and Find a meal. Camera capture uses a
