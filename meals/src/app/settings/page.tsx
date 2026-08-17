@@ -1,5 +1,5 @@
 import { getDb } from "@/lib/db";
-import { supabaseConfigured } from "@/lib/db/supabase";
+import { persistenceKind } from "@/lib/db";
 import { activeProviderName } from "@/lib/ai";
 import { SettingsView } from "@/components/settings-view";
 
@@ -14,7 +14,12 @@ export default async function SettingsPage() {
       householdName={household.name}
       members={members}
       config={{
-        storage: supabaseConfigured() ? "Supabase" : "Local dev store",
+        storage:
+          persistenceKind() === "supabase"
+            ? "Supabase"
+            : persistenceKind() === "local"
+              ? "Local dev store"
+              : "Not configured",
         parser:
           activeProviderName() === "openai"
             ? "OpenAI vision (real receipts)"

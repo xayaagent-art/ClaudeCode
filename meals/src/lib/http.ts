@@ -20,7 +20,9 @@ export async function handle<T>(fn: () => Promise<T>): Promise<NextResponse> {
     const err = error as Error & { userMessage?: string };
     // eslint-disable-next-line no-console
     console.error("[api]", err.name, err.message);
-    return fail(err.userMessage ?? "Something went wrong. Please try again.", 500);
+    // A missing database is a deployment problem, not a request problem.
+    const status = err.name === "PersistenceNotConfiguredError" ? 503 : 500;
+    return fail(err.userMessage ?? "Something went wrong. Please try again.", status);
   }
 }
 

@@ -1,7 +1,7 @@
 import { getDb } from "@/lib/db";
 import { todayISO } from "@/lib/date";
 import { inspectAll } from "@/lib/kitchen/state";
-import { supabaseConfigured } from "@/lib/db/supabase";
+import { persistenceKind } from "@/lib/db";
 import { activeProviderName } from "@/lib/ai";
 import { KitchenView } from "@/components/kitchen-view";
 
@@ -35,7 +35,7 @@ export default async function KitchenPage() {
         explanation: insight.explanation,
       }))}
       config={{
-        storage: supabaseConfigured() ? "supabase" : "local",
+        storage: persistenceKind(),
         parser: activeProviderName(),
       }}
     />
