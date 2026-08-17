@@ -36,7 +36,8 @@ signals, receipt telemetry. Also private storage for receipt images.
 | Ref | `mrsnfrrpfldgayqdgesp` |
 | Region | us-west-1 |
 | URL | `https://mrsnfrrpfldgayqdgesp.supabase.co` |
-| Migrations applied | `0001`, `0002`, `0003`, `0004` |
+| Migrations applied | `0001`, `0002`, `0003`, `0004`, `0005` |
+| Seeded | Household, both members, nutrition profiles, and the 16 starter inventory items. Recipes are **not** seeded — the catalog lives in `lib/meals/catalog.ts` and both adapters merge it in, so an empty `recipes` table is expected |
 | Tables | 16, RLS enabled on all 16 |
 | Functions | `upsert_product_mapping` |
 | Storage | `receipts` bucket, **private** |
@@ -69,9 +70,24 @@ and recipe discovery beyond the built-in catalog (`lib/meals/discover.ts`).
 | Where to get it | <https://platform.openai.com/api-keys> |
 | Free tier | No. Pay-as-you-go |
 | Expected testing cost | ~**$0.02–0.05 per receipt** (one high-detail image + ~2–4k output tokens on a GPT-5-class model). A 20-receipt test run is under $1. `OPENAI_RECEIPT_MODEL` can point transcription at a cheaper model |
-| Cost controls already built | Uploaded images are sha256-hashed, so re-uploading the same photo never re-parses. Learned store mappings resolve known lines without a model call. No household history is sent with a receipt parse |
-| How to validate | Set `AI_PROVIDER=openai` and `OPENAI_API_KEY`, scan a real receipt, then check the `receipt_telemetry` table for provider, model, latency, tokens and estimated cost |
-| Without it | `AI_PROVIDER=mock` replays a bundled fixture, labelled in the UI as mock. With `AI_PROVIDER=openai` **and no key**, scanning fails with a retryable error — it does **not** fall back to fixture data |
+| Optional tuning | `OPENAI_TIMEOUT_MS` (default 60000), `OPENAI_MAX_ATTEMPTS` (default 3), `OPENAI_RETRY_BASE_MS` (default 1000) |
+| Cost controls already built | Uploads are sniffed by magic bytes first, so a non-image never reaches the model. Images are sha256-hashed, so re-uploading the same photo never re-parses. Learned store mappings resolve known lines without a model call. Retries are limited to transient failures only — a bad image or a schema violation is never retried. No household history is sent with a receipt parse |
+| How to validate | Set `AI_PROVIDER=openai` and `OPENAI_API_KEY`, scan a real receipt, then check the `receipt_telemetry` table for provider, model, latency, tokens, estimated cost, attempt count and confidence banding |
+| Without it | `AI_PROVIDER=mock` replays a bundled fixture, labelled in the UI as mock. With `AI_PROVIDER=openai` **and no key**, scanning fails with a clear error — it does **not** fall back to fixture data |
+
+**Failure handling.** Every way a parse can fail has its own message and its own
+answer to whether a retry is worth offering:
+
+| Kind | Retry offered | Cause |
+| --- | --- | --- |
+| `invalid_image` | No | Bytes are not a decodable image. Caught before any spend |
+| `unreadable` | No | A real image, but no purchasable lines on it |
+| `truncated` | No | Receipt too long to transcribe in one reply |
+| `schema_invalid` | Yes | Reply was not valid JSON, or every line failed the contract |
+| `rate_limit` | Yes | Provider 429. Honours `Retry-After` |
+| `timeout` | Yes | Attempt exceeded `OPENAI_TIMEOUT_MS` |
+| `api_error` | Yes | 5xx, connection reset, or anything unclassified |
+| `partial` | n/a | Some lines dropped; the receipt is kept and marked `partially_parsed`, and the user is told how many are missing |
 
 ---
 
