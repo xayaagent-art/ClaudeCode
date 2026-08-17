@@ -173,16 +173,34 @@ export function assessVideo(
   const reach = views > 0 ? clamp01(Math.log10(views) / 6) : 0.3;
   if (views > 0) reasons.push(`${views.toLocaleString()} views`);
 
+  // Engagement relative to reach separates a video people actually watched and
+  // used from one an algorithm happened to push. Log-scaled and capped, because
+  // the difference between 1% and 2% like rate is not worth a ranking place.
+  const engagement = engagementScore(candidate);
+  if (engagement > 0.6) reasons.push("Strong engagement for its size");
+
+  // A cooking channel that has posted for years is a better bet than a larger
+  // general channel with one recipe on it. Deliberately weighted *below*
+  // relevance and instructional format: a big creator never buys its way past
+  // a video that is actually about the dish.
+  const culinary = candidate.channel_is_culinary === true;
+  const authority = channelAuthority(candidate);
+  if (culinary) reasons.push(`${candidate.channel} is a cooking channel`);
+  if (authority > 0.65) reasons.push("Established creator");
+
   const hasThumb = Boolean(candidate.thumbnail_url);
   if (!hasThumb) reasons.push("No thumbnail available");
 
   const score = clamp01(
-    0.4 * relevance +
-      0.2 * duration +
-      0.12 * reach +
-      (cuisineHit ? 0.1 : 0) +
-      (teaches ? 0.1 : 0) +
-      (hasThumb ? 0.08 : 0) -
+    0.34 * relevance +
+      0.16 * duration +
+      (teaches ? 0.12 : 0) +
+      (cuisineHit ? 0.09 : 0) +
+      (culinary ? 0.09 : 0) +
+      0.08 * authority +
+      0.06 * reach +
+      0.04 * engagement +
+      (hasThumb ? 0.06 : 0) -
       (offFormat ? 0.25 : 0),
   );
 
@@ -192,6 +210,41 @@ export function assessVideo(
     checked_at: new Date().toISOString(),
     disqualified: false,
   };
+}
+
+/**
+ * Engagement relative to audience size, 0-1.
+ *
+ * Absolute like counts just re-measure reach. The ratio is what says people
+ * finished the video and came back to say so.
+ */
+export function engagementScore(candidate: VideoCandidate): number {
+  const views = candidate.view_count ?? 0;
+  const likes = candidate.like_count ?? 0;
+  const comments = candidate.comment_count ?? 0;
+  if (views <= 0 || (likes === 0 && comments === 0)) return 0.4;
+
+  // A 3% like rate is excellent on YouTube; treat that as the ceiling.
+  const likeRate = clamp01(likes / views / 0.03);
+  const commentRate = clamp01(comments / views / 0.002);
+  return Math.round((0.7 * likeRate + 0.3 * commentRate) * 100) / 100;
+}
+
+/**
+ * How established the creator is, 0-1.
+ *
+ * Subscribers are log-scaled so the gap between 10k and 100k matters more than
+ * the gap between 5M and 10M — past a point, bigger is not better for a recipe,
+ * it is just bigger. A channel with a real back catalogue gets a small nudge.
+ */
+export function channelAuthority(candidate: VideoCandidate): number {
+  const subscribers = candidate.channel_subscribers ?? null;
+  if (subscribers === null) return 0.45;
+
+  // 1k → ~0.3, 100k → ~0.71, 1M+ → capped.
+  const scale = subscribers > 0 ? clamp01(Math.log10(subscribers) / 7) : 0;
+  const catalogue = (candidate.channel_video_count ?? 0) >= 50 ? 0.1 : 0;
+  return Math.round(clamp01(scale + catalogue) * 100) / 100;
 }
 
 /** Lowest score worth attaching to a recipe. Below this we show no video at all. */

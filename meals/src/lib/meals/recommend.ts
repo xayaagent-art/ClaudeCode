@@ -5,7 +5,13 @@ import { buildHouseholdContext } from "@/lib/household/context";
 import { generateMealCandidates } from "@/lib/meals/candidates";
 import { discoverRecipes } from "@/lib/meals/discover";
 import { resolveSourcesFor } from "@/lib/meals/discovery-service";
-import { dedupeAgainstMemory, isEstablished, worthRemembering } from "@/lib/meals/memory";
+import {
+  canonicalRecipeKey,
+  dedupeAgainstMemory,
+  isEstablished,
+  withoutNearDuplicates,
+} from "@/lib/meals/memory";
+import { materialize } from "@/lib/meals/registry";
 import { MIN_AVAILABILITY, rankRecipes, type ScoredRecipe } from "@/lib/meals/rank";
 import { portionsFor, type Portion } from "@/lib/nutrition/engine";
 import type { MealRecommendation, MealType, Recipe } from "@/lib/types";
@@ -66,12 +72,45 @@ const RECENTLY_SHOWN_DEPTH = 12;
  * always produce the same order, which is what makes a regeneration
  * reproducible and a bad pick explainable.
  */
-function noveltyPenalty(recipe: Recipe, shownRecently: Map<string, number>, regenerating: boolean): number {
+function noveltyPenalty(
+  recipe: Recipe,
+  shownRecently: Map<string, number>,
+  pressure: number,
+): number {
   const position = shownRecently.get(recipe.id);
   if (position === undefined) return 0;
   // Most recent gets the full penalty, decaying with age.
   const recency = 1 - position / RECENTLY_SHOWN_DEPTH;
-  return (regenerating ? 0.45 : 0.15) * Math.max(recency, 0.25);
+  return pressure * Math.max(recency, 0.25);
+}
+
+/**
+ * How hard to push away from what was just shown.
+ *
+ * Asking once is a browse; asking three times in a row means "not these".
+ * Pressure climbs with each consecutive regeneration so the set keeps moving,
+ * and is capped so relevance never collapses into novelty for its own sake —
+ * a dish that fits the kitchen far better than anything else can still win on
+ * the fourth press.
+ */
+function explorationPressure(regenerating: boolean, rounds: number): number {
+  if (!regenerating) return 0.15;
+  return Math.min(0.45 + 0.2 * Math.max(rounds - 1, 0), 0.95);
+}
+
+/**
+ * How many consecutive regenerations have just happened.
+ *
+ * Read from the recommendation history rather than held in the client, so the
+ * pressure survives a reload and a second phone.
+ */
+function regenerationRounds(shown: { created_at: string }[]): number {
+  if (shown.length === 0) return 0;
+  const newest = Date.parse(shown[0].created_at);
+  if (!Number.isFinite(newest)) return 0;
+  // Anything asked for within the last ten minutes is the same sitting.
+  const window = 10 * 60 * 1000;
+  return shown.filter((entry) => newest - Date.parse(entry.created_at) < window).length / 3;
 }
 
 /**
@@ -85,11 +124,15 @@ function noveltyPenalty(recipe: Recipe, shownRecently: Map<string, number>, rege
 function mixProvenAndNew(scored: ScoredRecipe[], count: number): ScoredRecipe[] {
   if (scored.length <= count) return scored;
 
-  const established = scored.filter((entry) => isEstablished(entry.recipe));
-  const exploratory = scored.filter((entry) => !isEstablished(entry.recipe));
+  // Never offer two versions of the same dinner in one set.
+  const distinct = withoutNearDuplicates(scored);
+  if (distinct.length <= count) return distinct.length > 0 ? distinct : scored.slice(0, count);
+
+  const established = distinct.filter((entry) => isEstablished(entry.recipe));
+  const exploratory = distinct.filter((entry) => !isEstablished(entry.recipe));
 
   // One side empty means there is no mix to strike.
-  if (established.length === 0 || exploratory.length === 0) return diversify(scored, count);
+  if (established.length === 0 || exploratory.length === 0) return diversify(distinct, count);
 
   // Two dishes the household can rely on, one it has never had. The new one
   // still had to out-rank every other new idea to get here.
@@ -100,7 +143,7 @@ function mixProvenAndNew(scored: ScoredRecipe[], count: number): ScoredRecipe[] 
   ];
 
   // Backfill from the overall ranking if either side ran short.
-  for (const entry of scored) {
+  for (const entry of distinct) {
     if (chosen.length >= count) break;
     if (!chosen.includes(entry)) chosen.push(entry);
   }
@@ -126,29 +169,48 @@ export async function recommendMeals(options: {
   const known = (await db.listRecipes()).filter((r) => !exclude.has(r.id));
 
   // What the household has already been offered lately, most recent first.
+  const recentRows = await db.listRecommendations(RECENTLY_SHOWN_DEPTH);
   const shownRecently = new Map<string, number>();
-  for (const [index, rec] of (await db.listRecommendations(RECENTLY_SHOWN_DEPTH)).entries()) {
+  const shownTitles: string[] = [];
+  for (const [index, rec] of recentRows.entries()) {
     if (!shownRecently.has(rec.recipe_id)) shownRecently.set(rec.recipe_id, index);
   }
+  const pressure = explorationPressure(regenerating, regenerationRounds(recentRows));
 
   // The model proposes; memory and the ranker decide. Generation failing is not
   // fatal — the household's own library still answers the question.
+  // Everything recently shown is named to the model, not just the stored ones:
+  // a generated dish is now persisted the moment it is displayed, so its title
+  // is available here and it stops being re-proposed under a new name.
+  for (const recipe of known) {
+    if (shownRecently.has(recipe.id)) shownTitles.push(recipe.title);
+  }
   const generated = await generateMealCandidates(context, {
-    exclude: [
-      ...context.recent_meals.map((meal) => meal.title),
-      ...known.filter((r) => shownRecently.has(r.id)).map((r) => r.title),
-    ],
+    exclude: [...context.recent_meals.map((meal) => meal.title), ...shownTitles],
   });
 
   const { fresh } = dedupeAgainstMemory(generated.recipes, known);
   const searchQueries = generated.searchQueries;
 
-  const pool = [...known, ...fresh.filter((r) => !exclude.has(r.id))];
+  // Exclusion has to be by dish identity, not by id. A generated candidate that
+  // turns out to be a dish already excluded carries a different id right up
+  // until it is materialised, at which point it collapses back onto the very
+  // recipe the user just asked not to see again.
+  const excludedKeys = new Set(
+    (await db.listRecipes())
+      .filter((recipe) => exclude.has(recipe.id))
+      .map((recipe) => recipe.canonical_key ?? canonicalRecipeKey(recipe.title, recipe.cuisine)),
+  );
+  const notExcluded = (recipe: Recipe) =>
+    !exclude.has(recipe.id) &&
+    !excludedKeys.has(recipe.canonical_key ?? canonicalRecipeKey(recipe.title, recipe.cuisine));
+
+  const pool = [...known, ...fresh.filter(notExcluded)];
   let scored = rankRecipes(pool, inventory, context, today).map((entry) => ({
     ...entry,
     score:
       Math.round(
-        (entry.score - noveltyPenalty(entry.recipe, shownRecently, regenerating)) * 1000,
+        (entry.score - noveltyPenalty(entry.recipe, shownRecently, pressure)) * 1000,
       ) / 1000,
   }));
   scored.sort((a, b) => b.score - a.score);
@@ -171,6 +233,19 @@ export async function recommendMeals(options: {
     }
   }
 
+  // A rename is not novelty. On an explicit regeneration, anything that is
+  // effectively the same dinner as one just shown is removed outright rather
+  // than merely penalised — "Palak Paneer Bowl" then "Paneer Spinach Bowl" is
+  // the exact complaint this exists to answer.
+  if (regenerating) {
+    const justShown = known.filter((recipe) => shownRecently.has(recipe.id));
+    if (justShown.length > 0) {
+      const survivors = withoutNearDuplicates(scored, justShown);
+      // Only apply it while enough genuinely different options remain.
+      if (survivors.length >= count) scored = survivors;
+    }
+  }
+
   const picked = mixProvenAndNew(scored, count);
 
   // Rank first, then look up videos — and only for what is about to be shown,
@@ -181,30 +256,38 @@ export async function recommendMeals(options: {
     .filter((entry) => !picked.includes(entry))
     .slice(0, SOURCE_BUFFER);
 
+  // Identity before display: every recipe about to be linked to is persisted
+  // first, so the detail page can open it and the next refresh knows it was
+  // offered. This is the fix for both the dead links and the repetition.
+  const durableById = await materialize(picked.map((entry) => entry.recipe));
+  const displayFor = picked
+    .map((entry) => durableById.get(entry.recipe.id))
+    .filter((recipe): recipe is Recipe => Boolean(recipe));
+
   const { recipes: withSources, outcomes } = await resolveSourcesFor(
-    picked.map((entry) => entry.recipe),
+    displayFor,
     context,
     { queries: searchQueries },
   );
 
   // Substitute from the buffer for anything that came back without a video.
+  // A substitute is materialised too — it is about to be linked to.
   const displayable = [...withSources];
   for (const [index, recipe] of withSources.entries()) {
     if (recipe.video_url || buffer.length === 0) continue;
     const replacement = buffer.shift()!;
-    const resolved = await resolveSourcesFor([replacement.recipe], context, {
+    const durableReplacement = (await materialize([replacement.recipe])).get(
+      replacement.recipe.id,
+    );
+    if (!durableReplacement) continue;
+
+    const resolved = await resolveSourcesFor([durableReplacement], context, {
       queries: searchQueries,
     });
     if (resolved.recipes[0]?.video_url) {
       displayable[index] = resolved.recipes[0];
-      picked[index] = replacement;
+      picked[index] = { ...replacement, recipe: durableReplacement };
     }
-  }
-
-  // Anything discovered that now has a real, watchable source becomes part of
-  // the household's library, so the next time it comes up it costs nothing.
-  for (const recipe of displayable) {
-    if (worthRemembering(recipe)) await db.upsertRecipe(recipe);
   }
 
   const sourceById = new Map(displayable.map((recipe) => [recipe.id, recipe]));
@@ -212,8 +295,13 @@ export async function recommendMeals(options: {
     (outcome) => outcome.outcome === "provider_unavailable",
   )?.reason;
 
-  const recommendations: Recommendation[] = picked.map((entry) => ({
-    recipe: sourceById.get(entry.recipe.id) ?? entry.recipe,
+  const recommendations: Recommendation[] = picked
+    .filter((entry) => durableById.has(entry.recipe.id) || sourceById.has(entry.recipe.id))
+    .map((entry) => ({
+    recipe:
+      sourceById.get(durableById.get(entry.recipe.id)?.id ?? entry.recipe.id) ??
+      durableById.get(entry.recipe.id) ??
+      entry.recipe,
     score: Math.round(entry.score * 1000) / 1000,
     reason: entry.reason,
     availability: Math.round(entry.availability.ratio * 100) / 100,

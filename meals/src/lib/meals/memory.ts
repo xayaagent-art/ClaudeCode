@@ -126,3 +126,97 @@ export function dedupeAgainstMemory(
 
   return { fresh, alreadyKnown };
 }
+
+/**
+ * Words describing how a dish is cooked rather than what is in it.
+ * Two dishes sharing ingredients but not preparation are genuinely different.
+ */
+const PREP_STYLES = [
+  "curry", "soup", "stew", "salad", "taco", "wrap", "burrito", "skillet", "bake",
+  "roast", "grill", "stir fry", "stirfry", "fried", "omelette", "frittata", "pasta",
+  "risotto", "pilaf", "biryani", "sandwich", "toast", "pizza", "dal", "chili",
+  "casserole", "gratin", "kebab", "burger", "noodle", "ramen", "shakshuka",
+];
+
+/** Ingredients too common to distinguish one dish from another. */
+const UBIQUITOUS = new Set([
+  "salt", "pepper", "oil", "olive oil", "water", "garlic", "onion", "yellow onion",
+  "butter", "sugar", "flour", "cumin", "coriander", "turmeric", "chili", "chilli",
+]);
+
+export interface DishSignature {
+  /** The two or three ingredients that actually define the dish. */
+  core: string[];
+  /** How it is cooked, when the title says. */
+  prep: string | null;
+  cuisine: string;
+}
+
+/**
+ * What a dish actually *is*, for near-duplicate detection.
+ *
+ * Title keys are not enough: "Palak Paneer Bowl" and "Paneer Spinach Bowl" sort
+ * to different keys but are the same dinner, and offering both as "variety" is
+ * exactly the complaint. Comparing core ingredients plus preparation catches
+ * the rename; comparing preparation stops it over-firing on genuinely different
+ * dishes that happen to share a protein.
+ */
+export function dishSignature(recipe: Recipe): DishSignature {
+  const core = [
+    ...new Set(
+      recipe.ingredients
+        .filter((ingredient) => !ingredient.optional)
+        .map((ingredient) => ingredient.normalized_name)
+        .filter((name) => name.length > 1 && !UBIQUITOUS.has(name)),
+    ),
+  ].sort();
+
+  const haystack = `${recipe.title} ${recipe.description}`.toLowerCase();
+  const prep = PREP_STYLES.find((style) => haystack.includes(style)) ?? null;
+
+  return { core, prep, cuisine: recipe.cuisine.toLowerCase() };
+}
+
+function jaccard(a: string[], b: string[]): number {
+  if (a.length === 0 || b.length === 0) return 0;
+  const setB = new Set(b);
+  const shared = a.filter((value) => setB.has(value)).length;
+  return shared / (a.length + b.length - shared);
+}
+
+/**
+ * Are these effectively the same dinner?
+ *
+ * Same canonical identity is obviously a duplicate. Beyond that it takes a
+ * heavy ingredient overlap *and* the same preparation — spinach-and-paneer
+ * curry versus spinach-and-paneer salad are two different evenings.
+ */
+export function isNearDuplicate(a: Recipe, b: Recipe): boolean {
+  const keyA = a.canonical_key ?? canonicalRecipeKey(a.title, a.cuisine);
+  const keyB = b.canonical_key ?? canonicalRecipeKey(b.title, b.cuisine);
+  if (keyA === keyB) return true;
+
+  const sigA = dishSignature(a);
+  const sigB = dishSignature(b);
+  const overlap = jaccard(sigA.core, sigB.core);
+
+  // Nearly the same ingredient list, cooked the same way.
+  if (overlap >= 0.6 && sigA.prep === sigB.prep) return true;
+  // Or an overwhelming ingredient match regardless of how it is described.
+  return overlap >= 0.8;
+}
+
+/** Drop anything that is effectively a repeat of something already chosen. */
+export function withoutNearDuplicates<T extends { recipe: Recipe }>(
+  entries: T[],
+  against: Recipe[] = [],
+): T[] {
+  const kept: Recipe[] = [...against];
+  const out: T[] = [];
+  for (const entry of entries) {
+    if (kept.some((existing) => isNearDuplicate(existing, entry.recipe))) continue;
+    kept.push(entry.recipe);
+    out.push(entry);
+  }
+  return out;
+}

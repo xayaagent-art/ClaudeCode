@@ -20,6 +20,16 @@ export interface VideoCandidate {
   duration_seconds: number | null;
   published_at: string | null;
   view_count: number | null;
+  /** Engagement, where the platform reports it. */
+  like_count?: number | null;
+  comment_count?: number | null;
+  /** Channel signals, used to prefer established cooking creators. */
+  channel_id?: string | null;
+  channel_subscribers?: number | null;
+  /** Channel's own lifetime video count, a weak proxy for being a real channel. */
+  channel_video_count?: number | null;
+  /** True when the channel's own description reads as a cooking channel. */
+  channel_is_culinary?: boolean | null;
 }
 
 export interface VideoSearchOptions {

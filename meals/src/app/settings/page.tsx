@@ -1,42 +1,28 @@
 import { getDb } from "@/lib/db";
-import { persistenceKind } from "@/lib/db";
-import { activeProviderName } from "@/lib/ai";
-import { modelRouting } from "@/lib/ai/models";
-import { youtubeProvider } from "@/lib/video/youtube";
 import { SettingsView } from "@/components/settings-view";
 
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
   const db = getDb();
-  const [household, members] = await Promise.all([db.getHousehold(), db.listMembers()]);
+  const [household, members, inventory] = await Promise.all([
+    db.getHousehold(),
+    db.listMembers(),
+    db.listInventory(),
+  ]);
+
+  // Seeded rows carry status_source "seed" and have no receipt behind them.
+  // Real groceries always arrive from a scan, so the two are distinguishable
+  // and "clear the demo pantry" can mean exactly that.
+  const demoCount = inventory.filter(
+    (item) => item.status_source === "seed" && !item.receipt_id && !item.receipt_item_id,
+  ).length;
 
   return (
     <SettingsView
       householdName={household.name}
       members={members}
-      config={{
-        storage:
-          persistenceKind() === "supabase"
-            ? "Supabase"
-            : persistenceKind() === "local"
-              ? "Local dev store"
-              : "Not configured",
-        parser:
-          activeProviderName() === "gemini"
-            ? `Gemini vision (${modelRouting().receipt_parse})`
-            : activeProviderName() === "openai"
-              ? "OpenAI vision (real receipts)"
-              : "Mock mode (bundled fixture)",
-        meals:
-          activeProviderName() === "gemini"
-            ? `Gemini (${modelRouting().meal_candidate_generation})`
-            : "Built-in recipe library only",
-        nutrition: process.env.FDC_API_KEY ? "USDA FoodData Central" : "Built-in generic table",
-        // Reports whether the provider can be called at all. It deliberately
-        // does not probe: a status line is not worth 100 units of daily quota.
-        video: youtubeProvider.enabled() ? "YouTube (live)" : "Not configured",
-      }}
+      kitchen={{ total: inventory.length, demo: demoCount }}
     />
   );
 }

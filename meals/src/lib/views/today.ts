@@ -60,10 +60,23 @@ export async function getTodayPayload(date = todayISO()): Promise<TodayPayload> 
     ...members.map((m) => ({ id: m.id as string | null, name: m.name })),
   ];
 
-  // The headline suggestion is the most recent one the household has not eaten yet.
+  // The headline suggestion is the most recent one the household has not eaten
+  // yet AND that still resolves to a real recipe. Walking the list rather than
+  // taking the first row matters: a recommendation whose recipe has since been
+  // removed used to blank the whole card, and an older catalog row could sit
+  // there looking current. Today now shows the newest suggestion that can
+  // actually be opened, from the same store every other screen reads.
   const eatenToday = new Set(todaysLogs.map((log) => log.recipe_id));
-  const pending = recommendations.find((rec) => !eatenToday.has(rec.recipe_id));
-  const recipe = pending ? await db.getRecipe(pending.recipe_id) : null;
+  let pending: (typeof recommendations)[number] | undefined;
+  let recipe: Awaited<ReturnType<typeof db.getRecipe>> = null;
+  for (const candidate of recommendations) {
+    if (eatenToday.has(candidate.recipe_id)) continue;
+    const resolved = await db.getRecipe(candidate.recipe_id);
+    if (!resolved) continue;
+    pending = candidate;
+    recipe = resolved;
+    break;
+  }
 
   return {
     date,

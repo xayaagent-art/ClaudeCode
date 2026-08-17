@@ -17,11 +17,11 @@ const DIETARY = [
 export function SettingsView({
   householdName,
   members,
-  config,
+  kitchen,
 }: {
   householdName: string;
   members: Member[];
-  config: { storage: string; parser: string; meals: string; nutrition: string; video: string };
+  kitchen: { total: number; demo: number };
 }) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
@@ -68,31 +68,13 @@ export function SettingsView({
 
       <Divider />
 
-      <section className="px-5 py-8">
-        <h2 className="text-section font-semibold">How this build is wired</h2>
-        <dl className="mt-3 space-y-2 text-meta">
-          <div className="flex justify-between gap-4">
-            <dt className="text-ink-muted">Storage</dt>
-            <dd>{config.storage}</dd>
-          </div>
-          <div className="flex justify-between gap-4">
-            <dt className="text-ink-muted">Receipt parser</dt>
-            <dd>{config.parser}</dd>
-          </div>
-          <div className="flex justify-between gap-4">
-            <dt className="text-ink-muted">Meal ideas</dt>
-            <dd>{config.meals}</dd>
-          </div>
-          <div className="flex justify-between gap-4">
-            <dt className="text-ink-muted">Nutrition data</dt>
-            <dd>{config.nutrition}</dd>
-          </div>
-          <div className="flex justify-between gap-4">
-            <dt className="text-ink-muted">Cooking videos</dt>
-            <dd>{config.video}</dd>
-          </div>
-        </dl>
-      </section>
+      <KitchenReset kitchen={kitchen} />
+
+      <p className="px-5 pb-10 text-meta text-ink-faint">
+        <Link href="/settings/diagnostics" className="hover:text-ink-muted">
+          Diagnostics
+        </Link>
+      </p>
     </>
   );
 }
@@ -315,5 +297,92 @@ function Chip({
     >
       {children}
     </button>
+  );
+}
+
+/**
+ * Emptying the kitchen.
+ *
+ * Two scopes, because they answer different questions. "Clear the demo pantry"
+ * is the one most people want once: get rid of the starter food the app
+ * invented so Kitchen reflects only real shopping. "Clear everything" is for
+ * starting over.
+ *
+ * Both take two taps. Neither touches who lives here, what they eat, their
+ * targets, or the recipes they have cooked.
+ */
+function KitchenReset({ kitchen }: { kitchen: { total: number; demo: number } }) {
+  const router = useRouter();
+  const [pending, setPending] = useState<"demo" | "all" | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<string | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+
+  async function run(scope: "demo" | "all") {
+    setBusy(true);
+    setFailed(null);
+    const response = await fetch("/api/inventory/reset", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope, confirm: scope }),
+    });
+    setBusy(false);
+    setPending(null);
+
+    if (!response.ok) {
+      setFailed("That didn't work. Nothing was removed.");
+      return;
+    }
+    const body = (await response.json()) as { removed: number };
+    setDone(
+      body.removed === 0
+        ? "There was nothing to remove."
+        : `Removed ${body.removed} item${body.removed === 1 ? "" : "s"}.`,
+    );
+    router.refresh();
+  }
+
+  return (
+    <section className="px-5 py-8" aria-label="Kitchen">
+      <h2 className="text-section font-semibold">Kitchen</h2>
+      <p className="mt-1 text-meta text-ink-muted">
+        {kitchen.total} item{kitchen.total === 1 ? "" : "s"} on hand
+        {kitchen.demo > 0 ? `, ${kitchen.demo} from the starter pantry` : ""}.
+      </p>
+
+      {failed ? <p className="mt-3 text-meta text-danger">{failed}</p> : null}
+      {done ? <p className="mt-3 text-meta text-ink-muted">{done}</p> : null}
+
+      {pending ? (
+        <div className="mt-4 rounded-xl border border-danger/25 bg-danger-soft px-4 py-4">
+          <p className="text-meta text-danger">
+            {pending === "demo"
+              ? `Remove ${kitchen.demo} starter item${kitchen.demo === 1 ? "" : "s"}? Anything from a scanned receipt stays.`
+              : `Remove all ${kitchen.total} items? Your household, preferences and cooked recipes are kept.`}
+          </p>
+          <div className="mt-3 flex gap-2">
+            <Button onClick={() => void run(pending)} disabled={busy}>
+              {busy ? "Removing…" : "Yes, remove"}
+            </Button>
+            <Button variant="secondary" onClick={() => setPending(null)} disabled={busy}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-4 flex flex-wrap gap-2">
+          {kitchen.demo > 0 ? (
+            <Button variant="secondary" onClick={() => setPending("demo")}>
+              Clear starter pantry
+            </Button>
+          ) : null}
+          {kitchen.total > 0 ? (
+            <Button variant="secondary" onClick={() => setPending("all")}>
+              Clear everything
+            </Button>
+          ) : null}
+        </div>
+      )}
+    </section>
   );
 }

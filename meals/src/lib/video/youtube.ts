@@ -12,6 +12,7 @@ import type { VideoCandidate, VideoProvider, VideoSearchOptions } from "@/lib/vi
 
 const SEARCH_ENDPOINT = "https://www.googleapis.com/youtube/v3/search";
 const VIDEOS_ENDPOINT = "https://www.googleapis.com/youtube/v3/videos";
+const CHANNELS_ENDPOINT = "https://www.googleapis.com/youtube/v3/channels";
 
 interface SearchItem {
   id?: { videoId?: string };
@@ -26,9 +27,30 @@ interface SearchItem {
 
 interface VideoItem {
   id?: string;
+  snippet?: { channelId?: string };
   contentDetails?: { duration?: string };
-  statistics?: { viewCount?: string };
+  statistics?: { viewCount?: string; likeCount?: string; commentCount?: string };
   status?: { embeddable?: boolean; privacyStatus?: string };
+}
+
+interface ChannelItem {
+  id?: string;
+  snippet?: { title?: string; description?: string };
+  statistics?: { subscriberCount?: string; videoCount?: string };
+}
+
+/** Words a cooking channel uses about itself. */
+const CULINARY_WORDS = [
+  "recipe", "cook", "cooking", "kitchen", "chef", "food", "baking", "cuisine",
+  "culinary", "meal", "dishes", "eats", "curry", "vegan", "vegetarian",
+];
+
+function looksCulinary(channel: ChannelItem | undefined): boolean {
+  if (!channel) return false;
+  const haystack = `${channel.snippet?.title ?? ""} ${channel.snippet?.description ?? ""}`
+    .toLowerCase()
+    .slice(0, 600);
+  return CULINARY_WORDS.some((word) => haystack.includes(word));
 }
 
 /** ISO-8601 duration (PT12M34S) → seconds. */
@@ -104,7 +126,7 @@ export class YouTubeProvider implements VideoProvider {
     try {
       const videosUrl = new URL(VIDEOS_ENDPOINT);
       videosUrl.searchParams.set("key", key);
-      videosUrl.searchParams.set("part", "contentDetails,statistics,status");
+      videosUrl.searchParams.set("part", "snippet,contentDetails,statistics,status");
       videosUrl.searchParams.set("id", ids);
       const videosResponse = await fetch(videosUrl, { signal: options.signal });
       if (videosResponse.ok) {
@@ -117,10 +139,41 @@ export class YouTubeProvider implements VideoProvider {
       // Details are an enhancement; a search result without them still ranks.
     }
 
+    // One batched channels.list for every distinct channel in the shortlist.
+    // Costs 1 quota unit total and is what lets an established cooking creator
+    // be told apart from a big general channel that happened to post a recipe.
+    const channels = new Map<string, ChannelItem>();
+    const channelIds = [
+      ...new Set(
+        [...details.values()]
+          .map((detail) => detail.snippet?.channelId)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ];
+    if (channelIds.length > 0) {
+      try {
+        const channelsUrl = new URL(CHANNELS_ENDPOINT);
+        channelsUrl.searchParams.set("key", key);
+        channelsUrl.searchParams.set("part", "snippet,statistics");
+        channelsUrl.searchParams.set("id", channelIds.join(","));
+        const channelsResponse = await fetch(channelsUrl, { signal: options.signal });
+        if (channelsResponse.ok) {
+          const body = (await channelsResponse.json()) as { items?: ChannelItem[] };
+          for (const item of body.items ?? []) {
+            if (item.id) channels.set(item.id, item);
+          }
+        }
+      } catch {
+        // Channel signals are a preference, not a requirement.
+      }
+    }
+
     return items
       .map((item): VideoCandidate => {
         const videoId = item.id!.videoId!;
         const detail = details.get(videoId);
+        const channelId = detail?.snippet?.channelId ?? null;
+        const channel = channelId ? channels.get(channelId) : undefined;
         return {
           platform: "youtube",
           video_id: videoId,
@@ -132,6 +185,18 @@ export class YouTubeProvider implements VideoProvider {
           duration_seconds: parseIsoDuration(detail?.contentDetails?.duration),
           published_at: item.snippet?.publishedAt ?? null,
           view_count: detail?.statistics?.viewCount ? Number(detail.statistics.viewCount) : null,
+          like_count: detail?.statistics?.likeCount ? Number(detail.statistics.likeCount) : null,
+          comment_count: detail?.statistics?.commentCount
+            ? Number(detail.statistics.commentCount)
+            : null,
+          channel_id: channelId,
+          channel_subscribers: channel?.statistics?.subscriberCount
+            ? Number(channel.statistics.subscriberCount)
+            : null,
+          channel_video_count: channel?.statistics?.videoCount
+            ? Number(channel.statistics.videoCount)
+            : null,
+          channel_is_culinary: channel ? looksCulinary(channel) : null,
         };
       })
       .filter((candidate) => {
