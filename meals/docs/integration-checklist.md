@@ -15,6 +15,7 @@ app either uses a clearly-labelled mock (receipt parsing) or degrades visibly
 | Service | Purpose | Status | Blocks development? |
 | --- | --- | --- | --- |
 | Supabase | Real persistence + private receipt image storage | **Project live, schema applied.** Runtime key not in `.env.local` | No |
+| Gemini | Receipt vision + dynamic meal candidate generation | **Key configured in Vercel Preview.** Needs `AI_PROVIDER=gemini` to activate | No — `AI_PROVIDER=mock` still works |
 | OpenAI | Real receipt parsing, recipe discovery | Code complete, unexercised | No — `AI_PROVIDER=mock` |
 | YouTube Data API v3 | Cooking videos on recipes | Code complete, unexercised | No — recipes show written steps |
 | USDA FoodData Central | Branded/generic nutrition matching | Code complete, unexercised | No — built-in generic table |
@@ -88,6 +89,40 @@ answer to whether a retry is worth offering:
 | `timeout` | Yes | Attempt exceeded `OPENAI_TIMEOUT_MS` |
 | `api_error` | Yes | 5xx, connection reset, or anything unclassified |
 | `partial` | n/a | Some lines dropped; the receipt is kept and marked `partially_parsed`, and the user is told how many are missing |
+
+---
+
+## 2b. Gemini (Google Generative Language API)
+
+**Purpose.** Receipt vision (`lib/ai/providers/gemini-provider.ts`) and dynamic
+meal candidate generation (`lib/meals/candidates.ts`).
+
+| | |
+| --- | --- |
+| Environment variables | `GEMINI_API_KEY`, plus `AI_PROVIDER=gemini` to activate |
+| Model overrides | `GEMINI_RECEIPT_MODEL`, `GEMINI_RECEIPT_ESCALATION_MODEL`, `GEMINI_MEAL_MODEL`. All routing lives in `lib/ai/models.ts` — no model id appears anywhere else |
+| Other tuning | `GEMINI_TIMEOUT_MS` (default 60000), `DYNAMIC_MEALS=off` to fall back to library-only recommendations |
+| Defaults | receipts `gemini-3.5-flash-lite`; meal ideas and receipt escalation `gemini-3.6-flash` |
+| How to validate | Settings shows `Receipt parser: Gemini vision (…)` and `Meal ideas: Gemini (…)`. Scan a receipt, then check `receipt_telemetry` for model, tokens, attempts, confidence banding and estimated cost |
+| Without it | `AI_PROVIDER=mock` replays the bundled fixture and recommendations come from the stored library only. Real mode never falls back to fixture data |
+
+**Cost policy, enforced in code**
+
+| Rule | Where |
+| --- | --- |
+| Receipts read on the cheap model | `modelFor("receipt_parse")` |
+| Escalation only when the cheap read genuinely failed — nothing returned, more lines dropped than kept, or confidence poor across the board | `shouldEscalateReceipt` |
+| A failed escalation keeps the cheap result rather than losing the receipt | `GeminiProvider.parseReceipt` |
+| One candidate-generation request per refresh, no tool loops | `generateMealCandidates` |
+| Re-uploading the same photo never re-parses | image sha256 in `ingestReceipt` |
+| Non-images never reach the model | `assertReadableImage` |
+| Video search runs after ranking, on 3 dishes plus a small buffer — not on all 16 candidates | `recommendMeals` |
+| A cooked dish is remembered, so it never needs generating or searching again | `logMeal` + `worthRemembering` |
+
+> **Price table caveat.** The Gemini entries in `lib/ai/pricing.ts` are
+> Flash-tier assumptions, not confirmed rate-card figures. They exist so
+> relative cost per receipt is trackable. Set `AI_PRICE_INPUT_PER_MTOK` /
+> `AI_PRICE_OUTPUT_PER_MTOK` once the real numbers are known.
 
 ---
 
