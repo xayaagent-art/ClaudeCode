@@ -11,10 +11,30 @@ import type { VideoCandidate } from "@/lib/video/provider";
  * as a numeric "AI quality score".
  */
 
-/** Words in a title that signal the video is not a cook-along recipe. */
-const OFF_FORMAT = [
-  "shorts", "asmr", "mukbang", "taste test", "reaction", "review", "vs ",
-  "challenge", "compilation", "top 10", "restaurant", "street food",
+/**
+ * Signals that a title is not a cook-along recipe.
+ *
+ * Patterns rather than substrings, because the ambiguous ones need context.
+ * "Restaurant" is the clearest case: "Restaurant Style Palak Paneer" is how a
+ * large share of genuine Indian cook-alongs are titled, and penalising it was
+ * pushing the best result for this household's most-cooked cuisine below the
+ * quality bar. Only restaurant content that is about *visiting* one is
+ * off-format. The word is also in TITLE_NOISE below, which is the tell: it
+ * cannot simultaneously be meaningless filler and evidence of a vlog.
+ */
+const OFF_FORMAT: RegExp[] = [
+  /\bshorts\b/,
+  /\basmr\b/,
+  /\bmukbang\b/,
+  /\btaste test\b/,
+  /\breaction\b/,
+  /\breview\b/,
+  /\bvs\b/,
+  /\bchallenge\b/,
+  /\bcompilation\b/,
+  /\btop \d+\b/,
+  /\brestaurant\b(?!\s*-?\s*style)/,
+  /\bstreet food\b/,
 ];
 
 /** Signals the creator is teaching a recipe rather than vlogging. */
@@ -144,7 +164,7 @@ export function assessVideo(
   const teaches = RECIPE_SIGNALS.some((signal) => title.includes(signal));
   if (teaches) reasons.push("Framed as a recipe rather than a vlog");
 
-  const offFormat = OFF_FORMAT.some((signal) => title.includes(signal));
+  const offFormat = OFF_FORMAT.some((pattern) => pattern.test(title));
   if (offFormat) reasons.push("Penalised: looks like non-recipe content");
 
   // Popularity is a weak credibility proxy, capped so a viral clip cannot

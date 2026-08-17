@@ -312,3 +312,122 @@ describe("youtube provider", () => {
     delete process.env.YOUTUBE_API_KEY;
   });
 });
+
+/**
+ * The checklist a live run has to satisfy, driven by payloads shaped like real
+ * YouTube results for the household's own catalog dishes. These are stubs, not
+ * network calls — but they exercise the same selection, caching and attribution
+ * code that a live key runs, so a regression here is a regression in production.
+ */
+describe("live-shaped results for real catalog dishes", () => {
+  const chana = catalogRecipes.find((r) => r.id === "cat-chana-masala")!;
+
+  it("keeps 'restaurant style' cook-alongs, which is how Indian recipes are titled", () => {
+    // Regression: "restaurant" was both a title-noise word and an off-format
+    // signal, so the best-matched result for an Indian dish took a 0.25 penalty.
+    const restaurantStyle = candidate({
+      title: "Palak Paneer Recipe | Restaurant Style Palak Paneer",
+      view_count: 1_400_000,
+    });
+    const assessment = assessVideo(restaurantStyle, palak, context);
+
+    expect(assessment.disqualified).toBe(false);
+    expect(assessment.score).toBeGreaterThanOrEqual(MIN_SOURCE_QUALITY);
+    expect(assessment.reasons.join(" ")).not.toMatch(/non-recipe/i);
+  });
+
+  it("still rejects a video about visiting a restaurant", () => {
+    const tour = candidate({ title: "Palak Paneer at a Delhi Restaurant Tour" });
+    expect(assessVideo(tour, palak, context).reasons.join(" ")).toMatch(/non-recipe/i);
+  });
+
+  it("picks the cook-along over a taste test for the same dish", () => {
+    const best = selectBestVideo(
+      [
+        candidate({
+          video_id: "taste",
+          url: "https://www.youtube.com/watch?v=taste",
+          title: "Palak Paneer Taste Test — is it worth it?",
+        }),
+        candidate({
+          video_id: "cook",
+          url: "https://www.youtube.com/watch?v=cook",
+          title: "Palak Paneer Recipe | Restaurant Style",
+          channel: "Ranveer Brar",
+        }),
+      ],
+      palak,
+      context,
+    );
+
+    expect(best?.candidate.video_id).toBe("cook");
+  });
+
+  it("matches a dish the household names differently from the video", () => {
+    // Our catalog says "Chana Masala with Basmati"; YouTube says "Chole".
+    expect(dishRelevance(chana.title, "Chana Masala Recipe | Punjabi Chole Masala")).toBeGreaterThan(
+      0.34,
+    );
+  });
+
+  it("rejects a chicken video for a household that does not eat chicken", () => {
+    const chicken = candidate({ title: "Chicken Palak Recipe | Saag Chicken" });
+    const assessment = assessVideo(chicken, palak, context);
+
+    expect(assessment.disqualified).toBe(true);
+    expect(assessment.score).toBe(0);
+    expect(assessment.reasons.join(" ")).toMatch(/chicken/i);
+  });
+
+  it("carries thumbnail, watch URL and attribution onto the recipe", async () => {
+    const provider = stubProvider([
+      candidate({
+        video_id: "kQ7x",
+        url: "https://www.youtube.com/watch?v=kQ7x",
+        title: "Palak Paneer Recipe | Restaurant Style",
+        channel: "Ranveer Brar",
+        thumbnail_url: "https://i.ytimg.com/vi/kQ7x/maxresdefault.jpg",
+      }),
+    ]);
+
+    const { recipe, outcome } = await resolveRecipeSource(palak, context, { provider });
+
+    expect(outcome).toBe("resolved");
+    // "Watch recipe" opens exactly the video that was selected.
+    expect(recipe.video_url).toBe("https://www.youtube.com/watch?v=kQ7x");
+    expect(recipe.video_platform).toBe("youtube");
+    // The thumbnail the card and hero render.
+    expect(recipe.thumbnail_url).toBe("https://i.ytimg.com/vi/kQ7x/maxresdefault.jpg");
+    // Attribution names the creator, not us.
+    expect(recipe.attribution).toBe("Video by Ranveer Brar on StubTube");
+    expect(recipe.source_name).toBe("Ranveer Brar");
+    expect(recipe.source_quality?.score).toBeGreaterThanOrEqual(MIN_SOURCE_QUALITY);
+  });
+
+  it("spends one search per dish no matter how often it is viewed", async () => {
+    const provider = stubProvider([candidate({ title: "Palak Paneer Recipe" })]);
+    const db = localDatabase();
+
+    await resolveRecipeSource(palak, context, { provider });
+    // Every later view reads the persisted recipe, exactly as a page load does.
+    for (let view = 0; view < 5; view += 1) {
+      const stored = (await db.getRecipe(palak.id))!;
+      const again = await resolveRecipeSource(stored, context, { provider });
+      expect(again.outcome).toBe("cached");
+    }
+
+    expect(provider.calls).toHaveLength(1);
+  });
+
+  it("costs nothing at all when the key is absent", async () => {
+    delete process.env.YOUTUBE_API_KEY;
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const results = await new YouTubeProvider().search("palak paneer recipe");
+
+    expect(results).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+});
