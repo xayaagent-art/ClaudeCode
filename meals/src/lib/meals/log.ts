@@ -1,6 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { getDb } from "@/lib/db";
+import { canonicalRecipeKey } from "@/lib/meals/memory";
 import { planDeductions } from "@/lib/kitchen/deduct";
 import { portionsFor } from "@/lib/nutrition/engine";
 import type { MealLog, MealType } from "@/lib/types";
@@ -48,6 +49,16 @@ export async function logMeal(input: LogMealInput): Promise<LogMealResult> {
   });
 
   const written = await db.logMeals(logs);
+
+  // Cooking it is what turns a suggestion into a household recipe. This is the
+  // moment a Gemini-generated idea stops being disposable: it now has a cook
+  // count, so it outranks untried ideas and never needs generating again.
+  await db.upsertRecipe({
+    ...recipe,
+    canonical_key: recipe.canonical_key ?? canonicalRecipeKey(recipe.title, recipe.cuisine),
+    times_cooked: recipe.times_cooked + 1,
+    last_cooked_at: consumedAt.slice(0, 10),
+  });
 
   const [inventory, events] = await Promise.all([db.listInventory(), db.listInventoryEvents(200)]);
   const totalServings = logs.reduce((acc, l) => acc + l.servings, 0);

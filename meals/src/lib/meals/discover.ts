@@ -2,6 +2,7 @@ import "server-only";
 import { z } from "zod";
 import { aiEnabled, structuredResponse } from "@/lib/ai/openai";
 import { canonicalName } from "@/lib/kitchen/match";
+import { canonicalRecipeKey } from "@/lib/meals/memory";
 import type { HouseholdContext, Recipe } from "@/lib/types";
 
 /**
@@ -145,6 +146,9 @@ function toRecipe(input: z.infer<typeof discoveredRecipeSchema>, index: number):
       unit: ing.unit,
       optional: ing.optional,
     })),
+    canonical_key: canonicalRecipeKey(input.title, input.cuisine),
+    times_cooked: 0,
+    last_cooked_at: null,
     created_at: new Date().toISOString(),
   };
 }

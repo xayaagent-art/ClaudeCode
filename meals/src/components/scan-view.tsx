@@ -11,7 +11,7 @@ type StageState = "pending" | "active" | "done";
 
 interface ParseResponse {
   receipt: { id: string; merchant: string | null };
-  parser: "openai" | "fixture";
+  parser: "openai" | "gemini" | "fixture";
   warnings: string[];
   counts: { food: number; ready: number; review: number; excluded: number };
   error?: string;

@@ -27,6 +27,13 @@ export interface ResolveOptions {
   /** Bypass the cache — used by "find a different video". */
   force?: boolean;
   provider?: VideoProvider;
+  /**
+   * Search terms supplied by the candidate generator, keyed by recipe id. The
+   * model naming its own dish beats deriving a query from our serving framing:
+   * "Palak Paneer Bowls" is our words, "palak paneer recipe" is what a cook
+   * would actually type.
+   */
+  queries?: Map<string, string>;
 }
 
 export interface ResolveOutcome {
@@ -73,7 +80,8 @@ export async function resolveRecipeSource(
   // C: external discovery. One search per dish, then cached forever.
   let candidates;
   try {
-    candidates = await provider.search(buildVideoQuery(recipe), { limit: 6 });
+    const query = options.queries?.get(recipe.id) ?? buildVideoQuery(recipe);
+    candidates = await provider.search(query, { limit: 6 });
   } catch (error) {
     return {
       recipe,

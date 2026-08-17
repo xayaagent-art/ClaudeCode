@@ -20,6 +20,14 @@ const PRICES: Record<string, Price> = {
   "gpt-4.1-mini": { input_per_mtok: 0.4, output_per_mtok: 1.6 },
   "gpt-4o": { input_per_mtok: 2.5, output_per_mtok: 10 },
   "gpt-4o-mini": { input_per_mtok: 0.15, output_per_mtok: 0.6 },
+
+  // Gemini. These are Flash-tier assumptions, not confirmed rate-card figures,
+  // and they are here so relative cost per receipt is trackable rather than
+  // absent. Set AI_PRICE_INPUT_PER_MTOK / AI_PRICE_OUTPUT_PER_MTOK once the
+  // real numbers are known; nothing in the app depends on their accuracy.
+  "gemini-3.6-flash": { input_per_mtok: 0.3, output_per_mtok: 2.5 },
+  "gemini-3.5-flash-lite": { input_per_mtok: 0.1, output_per_mtok: 0.4 },
+  "gemini-3.5-flash": { input_per_mtok: 0.3, output_per_mtok: 2.5 },
 };
 
 function priceFor(model: string): Price | null {

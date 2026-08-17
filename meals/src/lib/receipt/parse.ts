@@ -5,7 +5,7 @@ import { AIFailure, type AIFailureKind, classifyProviderError, copyForKind } fro
 import type { AIUsage, ImageInput } from "@/lib/ai";
 import type { ParsedReceipt } from "@/lib/receipt/schema";
 
-export type ParserKind = "openai" | "fixture";
+export type ParserKind = "openai" | "gemini" | "fixture";
 
 export interface ParseOutcome {
   receipt: ParsedReceipt;
@@ -55,7 +55,8 @@ export class ReceiptParseError extends Error {
  * "no key, quietly use the fixture" behaviour from the first milestone is gone.
  */
 export function activeParser(): ParserKind {
-  return activeProviderName() === "openai" ? "openai" : "fixture";
+  const provider = activeProviderName();
+  return provider === "mock" ? "fixture" : provider;
 }
 
 /** Stable identity for an uploaded image, so the same photo is recognised. */
@@ -78,7 +79,7 @@ export async function parseReceiptImage(image: ImageInput): Promise<ParseOutcome
     const result = await provider.parseReceipt(image);
     return {
       receipt: result.receipt,
-      parser: provider.name === "openai" ? "openai" : "fixture",
+      parser: provider.name === "mock" ? "fixture" : provider.name,
       model: result.model,
       usage: result.usage,
       latency_ms: Date.now() - startedAt,

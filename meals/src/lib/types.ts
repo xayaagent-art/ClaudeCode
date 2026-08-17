@@ -83,7 +83,7 @@ export interface Receipt {
   /** sha256 of the uploaded bytes, so the same photo is recognised. */
   image_hash: string | null;
   processing_status: ReceiptStatus;
-  parser: "openai" | "fixture" | null;
+  parser: "openai" | "gemini" | "fixture" | null;
   error_message: string | null;
   created_at: string;
 }
@@ -228,6 +228,11 @@ export interface Recipe {
   cooking_summary: string | null;
   instructions: string[];
   ingredients: RecipeIngredient[];
+  /** Stable identity for de-duplication across rediscoveries. */
+  canonical_key: string | null;
+  /** Incremented on Ate This. A proven recipe outranks an untried suggestion. */
+  times_cooked: number;
+  last_cooked_at: string | null;
   created_at: string;
 }
 

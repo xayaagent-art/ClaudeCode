@@ -21,7 +21,7 @@ export function SettingsView({
 }: {
   householdName: string;
   members: Member[];
-  config: { storage: string; parser: string; nutrition: string; video: string };
+  config: { storage: string; parser: string; meals: string; nutrition: string; video: string };
 }) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
@@ -78,6 +78,10 @@ export function SettingsView({
           <div className="flex justify-between gap-4">
             <dt className="text-ink-muted">Receipt parser</dt>
             <dd>{config.parser}</dd>
+          </div>
+          <div className="flex justify-between gap-4">
+            <dt className="text-ink-muted">Meal ideas</dt>
+            <dd>{config.meals}</dd>
           </div>
           <div className="flex justify-between gap-4">
             <dt className="text-ink-muted">Nutrition data</dt>

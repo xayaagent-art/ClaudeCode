@@ -101,6 +101,9 @@ function toRecipe(row: Row, ingredients: RecipeIngredient[]): Recipe {
     cooking_summary: (row.cooking_summary as string | null) ?? null,
     instructions: (row.instructions as string[]) ?? [],
     ingredients,
+    canonical_key: (row.canonical_key as string | null) ?? null,
+    times_cooked: Number(row.times_cooked ?? 0),
+    last_cooked_at: (row.last_cooked_at as string | null) ?? null,
     created_at: row.created_at as string,
   };
 }

@@ -30,7 +30,7 @@ interface ReviewReceipt {
   purchase_date: string | null;
   total: number | null;
   status: string;
-  parser: "openai" | "fixture" | null;
+  parser: "openai" | "gemini" | "fixture" | null;
 }
 
 export function ReviewView({ receipt, items }: { receipt: ReviewReceipt; items: ReviewItem[] }) {

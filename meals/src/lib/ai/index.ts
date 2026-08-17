@@ -1,5 +1,6 @@
 import "server-only";
 import { activeProviderName, type AIProvider } from "@/lib/ai/provider";
+import { GeminiProvider } from "@/lib/ai/providers/gemini-provider";
 import { MockProvider } from "@/lib/ai/providers/mock-provider";
 import { OpenAIProvider } from "@/lib/ai/providers/openai-provider";
 
@@ -12,7 +13,14 @@ import { OpenAIProvider } from "@/lib/ai/providers/openai-provider";
  * mode entirely.
  */
 export function getAIProvider(): AIProvider {
-  return activeProviderName() === "openai" ? new OpenAIProvider() : new MockProvider();
+  switch (activeProviderName()) {
+    case "gemini":
+      return new GeminiProvider();
+    case "openai":
+      return new OpenAIProvider();
+    default:
+      return new MockProvider();
+  }
 }
 
 /** Model identifier for telemetry, resolvable without making a call. */

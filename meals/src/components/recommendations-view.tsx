@@ -40,14 +40,19 @@ export function RecommendationsView() {
   const [error, setError] = useState<string | null>(null);
   const requested = useRef(false);
 
-  const load = useCallback(async (excludeIds: string[]) => {
+  const load = useCallback(async (excludeIds: string[], regenerating = false) => {
     setState("loading");
     setError(null);
     try {
       const response = await fetch("/api/meals/recommend", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ meal_type: "dinner", count: 3, exclude_recipe_ids: excludeIds }),
+        body: JSON.stringify({
+          meal_type: "dinner",
+          count: 3,
+          exclude_recipe_ids: excludeIds,
+          regenerate: regenerating,
+        }),
       });
       const body = (await response.json()) as RecommendResponse & { error?: string };
       if (!response.ok) throw new Error(body.error ?? "We couldn't put together suggestions.");
@@ -77,7 +82,7 @@ export function RecommendationsView() {
 
   function regenerate() {
     track("recommendation_regenerated", { count: data?.recommendations.length ?? 0 });
-    void load(data?.recommendations.map((r) => r.recipe.id) ?? []);
+    void load(data?.recommendations.map((r) => r.recipe.id) ?? [], true);
   }
 
   return (

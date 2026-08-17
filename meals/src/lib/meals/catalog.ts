@@ -1,4 +1,5 @@
 import { canonicalName } from "@/lib/kitchen/match";
+import { canonicalRecipeKey } from "@/lib/meals/memory";
 import type { Recipe, RecipeIngredient } from "@/lib/types";
 
 /**
@@ -567,6 +568,11 @@ export const catalogRecipes: Recipe[] = specs.map((spec) => ({
   discovered_at: null,
   cooking_summary: null,
   instructions: spec.instructions,
+  // The built-in library is memory the household starts with. Keyed so a
+  // Gemini candidate for the same dish collapses onto it instead of duplicating.
+  canonical_key: canonicalRecipeKey(spec.title, spec.cuisine),
+  times_cooked: 0,
+  last_cooked_at: null,
   ingredients: buildIngredients(spec.id, spec.ingredients),
   created_at: "2026-08-01T00:00:00.000Z",
 }));

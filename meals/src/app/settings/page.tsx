@@ -1,6 +1,7 @@
 import { getDb } from "@/lib/db";
 import { persistenceKind } from "@/lib/db";
 import { activeProviderName } from "@/lib/ai";
+import { modelRouting } from "@/lib/ai/models";
 import { youtubeProvider } from "@/lib/video/youtube";
 import { SettingsView } from "@/components/settings-view";
 
@@ -22,9 +23,15 @@ export default async function SettingsPage() {
               ? "Local dev store"
               : "Not configured",
         parser:
-          activeProviderName() === "openai"
-            ? "OpenAI vision (real receipts)"
-            : "Mock mode (bundled fixture)",
+          activeProviderName() === "gemini"
+            ? `Gemini vision (${modelRouting().receipt_parse})`
+            : activeProviderName() === "openai"
+              ? "OpenAI vision (real receipts)"
+              : "Mock mode (bundled fixture)",
+        meals:
+          activeProviderName() === "gemini"
+            ? `Gemini (${modelRouting().meal_candidate_generation})`
+            : "Built-in recipe library only",
         nutrition: process.env.FDC_API_KEY ? "USDA FoodData Central" : "Built-in generic table",
         // Reports whether the provider can be called at all. It deliberately
         // does not probe: a status line is not worth 100 units of daily quota.

@@ -9,7 +9,7 @@ import type { ParsedReceipt } from "@/lib/receipt/schema";
  * never a silent fall back to fixture data.
  */
 
-export type AIProviderName = "openai" | "mock";
+export type AIProviderName = "openai" | "gemini" | "mock";
 
 export interface ImageInput {
   base64: string;
@@ -65,6 +65,7 @@ export class AIConfigurationError extends Error {
 export function activeProviderName(): AIProviderName {
   const configured = process.env.AI_PROVIDER?.trim().toLowerCase();
   if (configured === "openai") return "openai";
+  if (configured === "gemini") return "gemini";
   if (configured === "mock") return "mock";
 
   // Legacy switch from the first milestone, still honoured.
@@ -72,10 +73,11 @@ export function activeProviderName(): AIProviderName {
   if (legacy === "openai") return "openai";
   if (legacy === "fixture") return "mock";
 
+  if (process.env.GEMINI_API_KEY) return "gemini";
   return process.env.OPENAI_API_KEY ? "openai" : "mock";
 }
 
 /** True when the app is running against real models rather than fixtures. */
 export function isRealMode(): boolean {
-  return activeProviderName() === "openai";
+  return activeProviderName() !== "mock";
 }

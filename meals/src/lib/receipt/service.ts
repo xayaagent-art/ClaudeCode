@@ -24,7 +24,7 @@ import type { Classification, Receipt, ReceiptItem, StorageLocation } from "@/li
 export interface IngestResult {
   receipt: Receipt;
   items: ReceiptItem[];
-  parser: "openai" | "fixture";
+  parser: "openai" | "gemini" | "fixture";
   warnings: string[];
   /** Set when this exact image was already processed. */
   duplicate_of: string | null;
