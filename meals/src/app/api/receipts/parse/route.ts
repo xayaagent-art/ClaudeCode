@@ -12,17 +12,29 @@ export async function POST(request: Request) {
   const form = await request.formData().catch(() => null);
   const file = form?.get("file");
 
+  // These four are request-shape problems the server can answer without
+  // touching storage or a model. Content validation happens deeper in, where
+  // the bytes themselves are sniffed.
   if (!(file instanceof File)) {
-    return fail("Attach a receipt photo to scan.", 400);
+    return fail("Attach a receipt photo to scan.", 400, { kind: "invalid_image", retryable: false });
   }
   if (file.size === 0) {
-    return fail("That file was empty. Try taking the photo again.", 400);
+    return fail("That file was empty. Try taking the photo again.", 400, {
+      kind: "invalid_image",
+      retryable: false,
+    });
   }
   if (file.size > MAX_BYTES) {
-    return fail("That image is too large. Try a photo under 12 MB.", 413);
+    return fail("That image is too large. Try a photo under 12 MB.", 413, {
+      kind: "invalid_image",
+      retryable: false,
+    });
   }
   if (file.type && !ACCEPTED.includes(file.type)) {
-    return fail("Receipts need to be a photo — JPEG, PNG or HEIC.", 415);
+    return fail("Receipts need to be a photo — JPEG, PNG or HEIC.", 415, {
+      kind: "invalid_image",
+      retryable: false,
+    });
   }
 
   return handle(async () => {

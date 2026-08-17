@@ -30,6 +30,10 @@ export interface ReceiptParseResult {
   usage: AIUsage | null;
   /** Non-fatal notes worth showing the user. */
   warnings: string[];
+  /** Provider calls actually made, including retries. Cost is per attempt. */
+  attempts: number;
+  /** Lines the model returned that failed validation and were left out. */
+  dropped_items: number;
 }
 
 export interface AIProvider {

@@ -15,5 +15,10 @@ export function getAIProvider(): AIProvider {
   return activeProviderName() === "openai" ? new OpenAIProvider() : new MockProvider();
 }
 
+/** Model identifier for telemetry, resolvable without making a call. */
+export function activeModelName(): string {
+  return getAIProvider().modelName();
+}
+
 export { activeProviderName, isRealMode, AIConfigurationError } from "@/lib/ai/provider";
 export type { AIProvider, AIUsage, ImageInput, ReceiptParseResult } from "@/lib/ai/provider";

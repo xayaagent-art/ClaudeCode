@@ -39,6 +39,8 @@ export class MockProvider implements AIProvider {
       warnings: [
         `Mock mode: this is the bundled ${fixture.merchant} fixture, not a reading of your image. Set AI_PROVIDER=openai to parse real receipts.`,
       ],
+      attempts: 1,
+      dropped_items: 0,
     };
   }
 }

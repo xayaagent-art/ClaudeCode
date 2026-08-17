@@ -2,15 +2,17 @@ import "server-only";
 import { getDb } from "@/lib/db";
 import { addDays, todayISO } from "@/lib/date";
 import { HOUSEHOLD_ID } from "@/lib/seed";
-import { activeProviderName } from "@/lib/ai";
+import { activeModelName, activeProviderName, isRealMode } from "@/lib/ai";
 import { ReceiptParseError, activeParser, hashImage, parseReceiptImage } from "@/lib/receipt/parse";
 import {
   bucketItems,
   confidenceBand,
+  confidenceDistribution,
   estimateShelfLifeDays,
   mergeForInventory,
   needsReview,
 } from "@/lib/receipt/normalize";
+import { assertReadableImage } from "@/lib/receipt/image";
 import { applyMappings, indexMappings, mappingFromCorrection } from "@/lib/receipt/mappings";
 import { decideRestock } from "@/lib/kitchen/restock";
 import { shelfLifeDays } from "@/lib/kitchen/freshness";
@@ -38,6 +40,13 @@ export interface IngestResult {
  */
 export async function ingestReceipt(bytes: Buffer, mimeType: string): Promise<IngestResult> {
   const db = getDb();
+
+  // Cheapest check first, and the only one that costs nothing: bytes that
+  // aren't a decodable image can never become a receipt, so they never reach
+  // the model, the storage bucket, or the receipts table. Mock mode ignores the
+  // image entirely, so there is nothing there to protect.
+  if (isRealMode()) assertReadableImage(bytes);
+
   const imageHash = hashImage(bytes);
 
   // Cost control: the same photo does not get parsed twice.
@@ -88,7 +97,9 @@ export async function ingestReceipt(bytes: Buffer, mimeType: string): Promise<In
       subtotal: parsed.subtotal,
       tax: parsed.tax,
       total: parsed.total,
-      processing_status: outcome.warnings.length > 0 ? "partially_parsed" : "parsed",
+      // "Partially parsed" means lines were genuinely lost, not merely that
+      // there was something to mention — a mock-mode notice isn't a data gap.
+      processing_status: outcome.dropped_items > 0 ? "partially_parsed" : "parsed",
       parser: outcome.parser,
     });
 
@@ -115,6 +126,7 @@ export async function ingestReceipt(bytes: Buffer, mimeType: string): Promise<In
     );
 
     const buckets = bucketItems(mappedItems);
+    const confidence = confidenceDistribution(mappedItems);
     await db.addTelemetry({
       receipt_id: receipt.id,
       provider: activeProviderName(),
@@ -128,6 +140,13 @@ export async function ingestReceipt(bytes: Buffer, mimeType: string): Promise<In
       high_confidence_count: buckets.ready.length,
       needs_review_count: buckets.review.length,
       excluded_count: buckets.excluded.length,
+      confidence_high: confidence.high,
+      confidence_medium: confidence.medium,
+      confidence_low: confidence.low,
+      mean_confidence: confidence.mean,
+      mapping_hit_count: applied.length,
+      dropped_item_count: outcome.dropped_items,
+      attempts: outcome.attempts,
       success: true,
       error_kind: null,
     });
@@ -141,10 +160,9 @@ export async function ingestReceipt(bytes: Buffer, mimeType: string): Promise<In
       mappings_applied: applied,
     };
   } catch (error) {
+    const failure = error instanceof ReceiptParseError ? error : null;
     const message =
-      error instanceof ReceiptParseError
-        ? error.userMessage
-        : "We couldn't read this receipt. Try again, or choose another photo.";
+      failure?.userMessage ?? "We couldn't read this receipt. Try again, or choose another photo.";
 
     await db.updateReceipt(receipt.id, {
       processing_status: "failed",
@@ -154,7 +172,7 @@ export async function ingestReceipt(bytes: Buffer, mimeType: string): Promise<In
     await db.addTelemetry({
       receipt_id: receipt.id,
       provider: activeProviderName(),
-      model: "unknown",
+      model: activeModelName(),
       latency_ms: Date.now() - startedAt,
       input_tokens: null,
       output_tokens: null,
@@ -164,9 +182,17 @@ export async function ingestReceipt(bytes: Buffer, mimeType: string): Promise<In
       high_confidence_count: 0,
       needs_review_count: 0,
       excluded_count: 0,
+      confidence_high: 0,
+      confidence_medium: 0,
+      confidence_low: 0,
+      mean_confidence: null,
+      mapping_hit_count: 0,
+      dropped_item_count: 0,
+      attempts: failure?.attempts ?? 1,
       success: false,
-      // The class name only — never the prompt or the image contents.
-      error_kind: (error as Error).name || "Error",
+      // The typed kind, or the error class name — never the prompt, the model's
+      // reply, or anything derived from the image.
+      error_kind: failure?.kind ?? (error as Error).name ?? "Error",
     });
 
     throw error;

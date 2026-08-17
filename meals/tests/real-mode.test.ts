@@ -33,6 +33,7 @@ function clearEnv() {
   delete process.env.AI_PROVIDER;
   delete process.env.RECEIPT_PARSER;
   delete process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_RETRY_BASE_MS;
 }
 
 beforeEach(async () => {
@@ -90,6 +91,9 @@ describe("real mode never falls back to fixture data", () => {
   it("surfaces a parse failure instead of returning the fixture", async () => {
     process.env.AI_PROVIDER = "openai";
     process.env.OPENAI_API_KEY = "sk-test";
+    // The retry policy is covered in receipt-vision.test.ts; here it only needs
+    // to run through, not to wait.
+    process.env.OPENAI_RETRY_BASE_MS = "1";
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => new Response("upstream exploded", { status: 500 })),

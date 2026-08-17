@@ -7,6 +7,7 @@
 export type AnalyticsEvent =
   | "receipt_scan_started"
   | "receipt_scan_completed"
+  | "receipt_scan_failed"
   | "receipt_item_corrected"
   | "receipt_confirmed"
   | "meal_recommendation_requested"

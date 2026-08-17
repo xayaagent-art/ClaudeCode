@@ -402,6 +402,17 @@ export interface ReceiptTelemetry {
   high_confidence_count: number;
   needs_review_count: number;
   excluded_count: number;
+  /** Confidence banding across the parse, so quality is visible over time. */
+  confidence_high: number;
+  confidence_medium: number;
+  confidence_low: number;
+  mean_confidence: number | null;
+  /** Lines resolved from a learned mapping rather than trusted from the model. */
+  mapping_hit_count: number;
+  /** Lines the model returned that failed validation and were left out. */
+  dropped_item_count: number;
+  /** Provider calls made, including retries. Cost scales with this. */
+  attempts: number;
   success: boolean;
   error_kind: string | null;
   created_at: string;

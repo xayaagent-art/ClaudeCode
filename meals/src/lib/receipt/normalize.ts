@@ -184,6 +184,37 @@ export function bucketItems(items: ParsedReceiptItem[]): ReviewBuckets {
   return { ready, review, excluded };
 }
 
+export interface ConfidenceDistribution {
+  high: number;
+  medium: number;
+  low: number;
+  /** Null for an empty parse — a mean of zero would read as "no confidence". */
+  mean: number | null;
+}
+
+/**
+ * How confident the parse was, in aggregate.
+ *
+ * Item counts alone can't tell a clean receipt from a marginal one: thirty
+ * items at 0.62 and thirty at 0.98 both look like "30 items found". Banding
+ * plus the mean makes a degrading model or a run of bad photos visible in
+ * telemetry before the household starts noticing wrong food in the kitchen.
+ */
+export function confidenceDistribution(
+  items: Pick<ParsedReceiptItem, "confidence">[],
+): ConfidenceDistribution {
+  const distribution: ConfidenceDistribution = { high: 0, medium: 0, low: 0, mean: null };
+  if (items.length === 0) return distribution;
+
+  let sum = 0;
+  for (const item of items) {
+    sum += item.confidence;
+    distribution[confidenceBand(item.confidence)] += 1;
+  }
+  distribution.mean = Math.round((sum / items.length) * 1000) / 1000;
+  return distribution;
+}
+
 /**
  * Merge repeated purchases of the same product into one inventory line.
  * Two "YELLOW SQUASH EA" lines are one squash entry with quantity 2 — but the

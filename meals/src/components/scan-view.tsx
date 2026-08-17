@@ -15,7 +15,26 @@ interface ParseResponse {
   warnings: string[];
   counts: { food: number; ready: number; review: number; excluded: number };
   error?: string;
+  /** Failure taxonomy from the server; absent on older/unknown errors. */
+  kind?: string;
+  title?: string;
+  retryable?: boolean;
 }
+
+interface ScanFailure {
+  title: string;
+  message: string;
+  /** True when trying the same photo again could plausibly work. */
+  retryable: boolean;
+  kind: string;
+}
+
+/** A network error never reaches the server, so the server can't classify it. */
+const OFFLINE: Omit<ScanFailure, "message"> = {
+  title: "Couldn't reach the kitchen",
+  retryable: true,
+  kind: "network",
+};
 
 /**
  * Every stage below corresponds to something that actually happened. Nothing
@@ -33,15 +52,25 @@ export function ScanView() {
   });
   const [labels, setLabels] = useState<Partial<Record<StageId, string>>>({});
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [failure, setFailure] = useState<ScanFailure | null>(null);
+  // Held so "Try again" resends the same photo rather than asking the user to
+  // find it again — the commonest failures are transient and worth one tap.
+  const lastFile = useRef<File | null>(null);
 
   function setStage(id: StageId, state: StageState, label?: string) {
     setStages((current) => ({ ...current, [id]: state }));
     if (label) setLabels((current) => ({ ...current, [id]: label }));
   }
 
+  function reset() {
+    setStages({ upload: "pending", read: "pending", items: "pending", match: "pending" });
+    setLabels({});
+    setBusy(false);
+  }
+
   async function onFile(file: File) {
-    setError(null);
+    lastFile.current = file;
+    setFailure(null);
     setBusy(true);
     track("receipt_scan_started", { size_bytes: file.size, type: file.type || "unknown" });
 
@@ -49,13 +78,37 @@ export function ScanView() {
     const form = new FormData();
     form.append("file", file);
 
+    let response: Response;
     try {
-      const response = await fetch("/api/receipts/parse", { method: "POST", body: form });
+      response = await fetch("/api/receipts/parse", { method: "POST", body: form });
+    } catch {
+      setFailure({
+        ...OFFLINE,
+        message: "Check your connection and try again — the photo is still here.",
+      });
+      reset();
+      track("receipt_scan_failed", { kind: "network" });
+      return;
+    }
+
+    try {
       setStage("upload", "done", "Photo uploaded");
       setStage("read", "active");
 
       const body = (await response.json()) as ParseResponse;
-      if (!response.ok) throw new Error(body.error ?? "We couldn't read that receipt.");
+      if (!response.ok) {
+        setFailure({
+          title: body.title ?? "We couldn't read that receipt",
+          message: body.error ?? "Try again, or choose another photo.",
+          // Unknown failures get a retry: an unclassified error is more often
+          // transient than permanent.
+          retryable: body.retryable ?? true,
+          kind: body.kind ?? "unknown",
+        });
+        reset();
+        track("receipt_scan_failed", { kind: body.kind ?? "unknown" });
+        return;
+      }
 
       setStage("read", "done", body.receipt.merchant ? `${body.receipt.merchant} detected` : "Receipt read");
       setStage("items", "done", `${body.counts.food} food items found`);
@@ -75,10 +128,16 @@ export function ScanView() {
       });
 
       router.push(`/kitchen/review/${body.receipt.id}`);
-    } catch (caught) {
-      setError((caught as Error).message);
-      setStages({ upload: "pending", read: "pending", items: "pending", match: "pending" });
-      setBusy(false);
+    } catch {
+      // The server answered but we couldn't make sense of it.
+      setFailure({
+        title: "Something went wrong",
+        message: "We couldn't read that receipt. Try again, or choose another photo.",
+        retryable: true,
+        kind: "unknown",
+      });
+      reset();
+      track("receipt_scan_failed", { kind: "unknown" });
     }
   }
 
@@ -160,10 +219,40 @@ export function ScanView() {
         </section>
       )}
 
-      {error ? (
-        <div className="pt-6">
-          <ErrorNote>{error}</ErrorNote>
-        </div>
+      {failure ? (
+        <section className="pt-6" aria-live="assertive">
+          <ErrorNote>
+            <span className="font-medium">{failure.title}</span>
+            <span className="mt-1 block">{failure.message}</span>
+          </ErrorNote>
+
+          <div className="mt-4 space-y-3 px-5">
+            {failure.retryable && lastFile.current ? (
+              <Button
+                full
+                onClick={() => {
+                  const file = lastFile.current;
+                  if (file) void onFile(file);
+                }}
+              >
+                Try again
+              </Button>
+            ) : null}
+            <Button
+              full
+              variant="secondary"
+              onClick={() => {
+                setFailure(null);
+                if (inputRef.current) {
+                  inputRef.current.removeAttribute("capture");
+                  inputRef.current.click();
+                }
+              }}
+            >
+              Choose another photo
+            </Button>
+          </div>
+        </section>
       ) : null}
     </>
   );
