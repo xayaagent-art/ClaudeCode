@@ -21,6 +21,8 @@ export async function POST(request: Request) {
   const parsed = bodySchema.parse(body ?? {});
   const startDate = parsed.start_date ?? todayISO();
 
+  const startedAt = Date.now();
+
   return handle(async () => {
     const db = getDb();
     const { context, inventory } = await buildHouseholdContext("dinner", startDate);
@@ -53,6 +55,22 @@ export async function POST(request: Request) {
     }));
 
     const plan = await db.savePlan({ start_date: startDate, entries: addressable });
-    return plan;
+
+    // eslint-disable-next-line no-console
+    console.info(
+      "[plans/generate]",
+      JSON.stringify({
+        ms: Date.now() - startedAt,
+        generation: generated.outcome,
+        model: generated.model,
+        candidates: generated.recipes.length,
+        fresh: fresh.length,
+        planned: planned.length,
+        materialized: durable.size,
+        days: parsed.days,
+      }),
+    );
+
+    return { ...plan, generation_failed: generated.outcome === "failed" };
   });
 }

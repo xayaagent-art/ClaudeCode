@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { track } from "@/lib/analytics";
+import { postJson } from "@/lib/client-fetch";
 import { addDays, formatShortDay } from "@/lib/date";
 import type { PlanEntry } from "@/lib/types";
 import { AvatarLink, Button, EmptyState, ErrorNote, LinkButton, Pill } from "@/components/ui";
@@ -28,15 +29,7 @@ export function PlanView({
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch("/api/plans/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ start_date: startDate, days: 7 }),
-      });
-      if (!response.ok) {
-        const body = (await response.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error ?? "We couldn't build a plan just now.");
-      }
+      await postJson("/api/plans/generate", { start_date: startDate, days: 7 });
       track("plan_generated", { start_date: startDate });
       router.refresh();
     } catch (caught) {

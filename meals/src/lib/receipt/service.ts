@@ -50,8 +50,13 @@ export async function ingestReceipt(bytes: Buffer, mimeType: string): Promise<In
   const imageHash = hashImage(bytes);
 
   // Cost control: the same photo does not get parsed twice.
+  // A cached receipt is only reusable if it was read the way we read receipts
+  // *now*. A photo scanned during mock mode is stored with parser "fixture";
+  // returning it once Gemini is live re-showed the bundled sample and told the
+  // user it was their receipt. Same image, different parser, so parse it again.
   const existing = await db.findReceiptByHash(imageHash);
-  if (existing && existing.processing_status !== "failed") {
+  const staleParser = existing ? existing.parser !== activeParser() : false;
+  if (existing && existing.processing_status !== "failed" && !staleParser) {
     const items = await db.listReceiptItems(existing.id);
     return {
       receipt: existing,

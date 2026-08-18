@@ -130,8 +130,7 @@ export function ReviewView({ receipt, items }: { receipt: ReviewReceipt; items: 
         </p>
         {receipt.parser === "fixture" ? (
           <p className="mt-4 rounded-xl border border-warn/25 bg-warn-soft px-4 py-3 text-meta text-warn">
-            Offline demo parser — this is the bundled sample receipt, not a reading of your photo.
-            Set <code className="font-mono">OPENAI_API_KEY</code> to scan real receipts.
+            Demo mode — this is a bundled sample receipt, not a reading of your photo.
           </p>
         ) : null}
       </header>

@@ -28,10 +28,59 @@ function apiKey(): string {
   return key;
 }
 
+/**
+ * Wall-clock ceiling for ONE attempt.
+ *
+ * This has to fit inside the serverless function limit with room for retries
+ * and for everything the route does afterwards. It used to be 60s — the same
+ * as the function limit — so three attempts plus backoff could run for over
+ * three minutes against a sixty-second budget. The platform killed the
+ * function mid-flight, no response was ever written, and the phone showed
+ * "Load failed" while the server logged nothing at all.
+ */
 function timeoutMs(): number {
   const configured = Number(process.env.GEMINI_TIMEOUT_MS);
   if (Number.isFinite(configured) && configured > 0) return configured;
-  return 60_000;
+  return 20_000;
+}
+
+/**
+ * Hard ceiling across all attempts. Nothing may exceed this, so a caller can
+ * reason about the worst case rather than hoping.
+ *
+ * Sized against what still has to happen after the model answers: ranking,
+ * up to a handful of YouTube lookups, the Supabase writes that give recipes
+ * their identity, and serialisation. Against a 60-second function limit, the
+ * model gets 25 and the rest of the route keeps 35.
+ */
+function budgetMs(): number {
+  const configured = Number(process.env.GEMINI_BUDGET_MS);
+  if (Number.isFinite(configured) && configured > 0) return configured;
+  return 25_000;
+}
+
+/**
+ * Generation parameters.
+ *
+ * Deliberately minimal. Only the fields this app actually depends on are sent,
+ * because an unsupported or deprecated knob is rejected for the whole request —
+ * and a request that fails on a parameter looks identical, from the outside, to
+ * a model that had nothing to say. `temperature` is opt-in via GEMINI_TEMPERATURE
+ * rather than always-on for exactly that reason.
+ */
+function generationConfig(request: GeminiRequest): Record<string, unknown> {
+  const config: Record<string, unknown> = {
+    maxOutputTokens: request.maxOutputTokens ?? 8000,
+    responseMimeType: "application/json",
+  };
+  if (request.responseSchema) config.responseSchema = request.responseSchema;
+
+  const configured = Number(process.env.GEMINI_TEMPERATURE);
+  if (Number.isFinite(configured)) config.temperature = configured;
+  else if (request.temperature !== undefined && process.env.GEMINI_SEND_TEMPERATURE === "true") {
+    config.temperature = request.temperature;
+  }
+  return config;
 }
 
 export interface InlineImage {
@@ -109,18 +158,24 @@ export async function generateContent(request: GeminiRequest): Promise<GeminiRes
 
   const body: Record<string, unknown> = {
     contents: [{ role: "user", parts }],
-    system_instruction: { parts: [{ text: request.system }] },
-    generationConfig: {
-      temperature: request.temperature ?? 0,
-      maxOutputTokens: request.maxOutputTokens ?? 8000,
-      responseMimeType: "application/json",
-      ...(request.responseSchema ? { responseSchema: request.responseSchema } : {}),
-    },
+    // Canonical JSON name for the field. Proto3 JSON accepts either spelling,
+    // but the documented one is what the API reference and every example use.
+    systemInstruction: { parts: [{ text: request.system }] },
+    generationConfig: generationConfig(request),
   };
 
+  const startedAt = Date.now();
+  const budget = budgetMs();
+
   const { value, attempts } = await withRetry(async () => {
+    // Never start an attempt that cannot finish inside the budget.
+    const remaining = budget - (Date.now() - startedAt);
+    if (remaining <= 1_000) {
+      throw new AIFailure("timeout", `gemini budget of ${budget}ms exhausted`);
+    }
+    const attemptTimeout = Math.min(timeoutMs(), remaining);
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs());
+    const timer = setTimeout(() => controller.abort(), attemptTimeout);
 
     let response: Response;
     try {
@@ -134,7 +189,7 @@ export async function generateContent(request: GeminiRequest): Promise<GeminiRes
       });
     } catch (error) {
       if ((error as Error).name === "AbortError") {
-        throw new AIFailure("timeout", `gemini call exceeded ${timeoutMs()}ms`);
+        throw new AIFailure("timeout", `gemini call exceeded ${attemptTimeout}ms`);
       }
       throw new AIFailure("api_error", `gemini request failed: ${(error as Error).name}`);
     } finally {
@@ -142,10 +197,17 @@ export async function generateContent(request: GeminiRequest): Promise<GeminiRes
     }
 
     if (!response.ok) {
-      throw failureForStatus(response.status, response.headers.get("retry-after"));
+      const failure = failureForStatus(response.status, response.headers.get("retry-after"));
+      // Status and model only — a provider error body can quote the prompt.
+      // eslint-disable-next-line no-console
+      console.error(
+        "[gemini] request failed",
+        JSON.stringify({ model: request.model, status: response.status, kind: failure.kind }),
+      );
+      throw failure;
     }
     return (await response.json()) as GeminiResponseBody;
-  });
+  }, { attempts: 2, baseDelayMs: 500 });
 
   const candidate = value.candidates?.[0];
 
@@ -163,6 +225,21 @@ export async function generateContent(request: GeminiRequest): Promise<GeminiRes
       truncated ? "gemini hit maxOutputTokens" : "gemini returned no text",
     );
   }
+
+  // eslint-disable-next-line no-console
+  console.info(
+    "[gemini]",
+    JSON.stringify({
+      model: request.model,
+      ms: Date.now() - startedAt,
+      attempts,
+      truncated,
+      chars: text.length,
+      // Token counts only. No prompt, no image, no key.
+      in: value.usageMetadata?.promptTokenCount ?? null,
+      out: value.usageMetadata?.candidatesTokenCount ?? null,
+    }),
+  );
 
   const inputTokens = value.usageMetadata?.promptTokenCount ?? null;
   const outputTokens = value.usageMetadata?.candidatesTokenCount ?? null;

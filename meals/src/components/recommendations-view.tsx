@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { track } from "@/lib/analytics";
+import { postJson } from "@/lib/client-fetch";
 import { Button, Card, ErrorNote, Pill, RecipePlate } from "@/components/ui";
 
 interface Recommendation {
@@ -32,6 +33,9 @@ interface RecommendResponse {
   discovery_used: boolean;
   /** Set when videos could not be looked up, e.g. no YouTube key configured. */
   source_note: string | null;
+  /** Set when meal generation failed and these came from saved recipes only. */
+  generation_failed?: boolean;
+  generation_note?: string | null;
 }
 
 export function RecommendationsView() {
@@ -44,18 +48,12 @@ export function RecommendationsView() {
     setState("loading");
     setError(null);
     try {
-      const response = await fetch("/api/meals/recommend", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          meal_type: "dinner",
-          count: 3,
-          exclude_recipe_ids: excludeIds,
-          regenerate: regenerating,
-        }),
+      const body = await postJson<RecommendResponse>("/api/meals/recommend", {
+        meal_type: "dinner",
+        count: 3,
+        exclude_recipe_ids: excludeIds,
+        regenerate: regenerating,
       });
-      const body = (await response.json()) as RecommendResponse & { error?: string };
-      if (!response.ok) throw new Error(body.error ?? "We couldn't put together suggestions.");
       setData(body);
       setState("ready");
       // One "seen" signal per recommendation actually shown.
@@ -123,6 +121,11 @@ export function RecommendationsView() {
             </div>
           ) : (
             <>
+              {data.generation_note ? (
+                <p className="mx-5 mb-4 rounded-xl border border-warn/25 bg-warn-soft px-4 py-3 text-meta text-warn">
+                  {data.generation_note}
+                </p>
+              ) : null}
               {data.source_note ? (
                 <p className="mx-5 mb-5 rounded-xl border border-line bg-surface-sunken px-4 py-3 text-meta text-ink-muted">
                   Cooking videos aren&apos;t set up yet, so these show written steps only.

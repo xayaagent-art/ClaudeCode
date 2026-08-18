@@ -35,6 +35,13 @@ export interface RecommendResult {
   discovery_used: boolean;
   /** Plain-language note when videos could not be looked up, e.g. no API key. */
   source_note: string | null;
+  /**
+   * Set when meal generation was attempted and failed. The library still
+   * answered, but these are not the intelligent suggestions — saying so is the
+   * difference between graceful degradation and quietly pretending.
+   */
+  generation_failed: boolean;
+  generation_note: string | null;
 }
 
 /** No more than two of the same cuisine in one set of three. */
@@ -158,6 +165,7 @@ export async function recommendMeals(options: {
   /** Set when the user asked for a different set, not just the first one. */
   regenerate?: boolean;
 }): Promise<RecommendResult> {
+  const routeStartedAt = Date.now();
   const mealType = options.mealType ?? "dinner";
   const count = options.count ?? 3;
   const today = options.today ?? todayISO();
@@ -334,10 +342,31 @@ export async function recommendMeals(options: {
     );
   }
 
+  const generationFailed = generated.outcome === "failed";
+  // eslint-disable-next-line no-console
+  console.info(
+    "[recommend]",
+    JSON.stringify({
+      ms: Date.now() - routeStartedAt,
+      generation: generated.outcome,
+      model: generated.model,
+      candidates: generated.recipes.length,
+      pool: pool.length,
+      picked: picked.length,
+      materialized: durableById.size,
+      returned: recommendations.length,
+      regenerating,
+    }),
+  );
+
   return {
     recommendations,
     weak_match: recommendations.every((r) => r.availability < MIN_AVAILABILITY),
     discovery_used: discoveryUsed,
     source_note: sourceIssue ?? null,
+    generation_failed: generationFailed,
+    generation_note: generationFailed
+      ? "We couldn't reach the meal planner just now, so these come from your saved recipes."
+      : null,
   };
 }

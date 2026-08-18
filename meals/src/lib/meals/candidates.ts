@@ -1,6 +1,7 @@
 import "server-only";
 import { z } from "zod";
 import { generateContent } from "@/lib/ai/gemini";
+import { AIFailure, classifyProviderError, type AIFailureKind } from "@/lib/ai/failure";
 import { modelFor } from "@/lib/ai/models";
 import { geminiConfigured } from "@/lib/ai/gemini";
 import { canonicalName } from "@/lib/kitchen/match";
@@ -96,23 +97,35 @@ Rules:
   household may not have. Do not pretend a recipe needs only what is in stock.
 - estimated_cook_minutes is active cooking time, honestly estimated.`;
 
+export type CandidateOutcome =
+  /** Gemini answered and the concepts validated. */
+  | "generated"
+  /** Not configured for dynamic meals at all — an expected, quiet state. */
+  | "disabled"
+  /** Gemini was asked and did not deliver. Never quiet. */
+  | "failed";
+
 export interface CandidateGeneration {
   recipes: Recipe[];
   /** Model-supplied video search terms, keyed by recipe id. */
   searchQueries: Map<string, string>;
   model: string;
   usage: AIUsage | null;
-  /** Null when generation was skipped or failed; never throws. */
+  outcome: CandidateOutcome;
+  /** Typed failure kind when outcome is "failed". */
+  failureKind: AIFailureKind | null;
+  /** Operator-facing detail. Never rendered raw to the user. */
   error: string | null;
 }
 
-const EMPTY: CandidateGeneration = {
-  recipes: [],
-  searchQueries: new Map(),
-  model: "none",
-  usage: null,
-  error: null,
-};
+function empty(
+  outcome: CandidateOutcome,
+  model = "none",
+  failureKind: AIFailureKind | null = null,
+  error: string | null = null,
+): CandidateGeneration {
+  return { recipes: [], searchQueries: new Map(), model, usage: null, outcome, failureKind, error };
+}
 
 /** How many concepts to ask for. Enough for the ranker to be selective. */
 const TARGET = 16;
@@ -133,7 +146,7 @@ export async function generateMealCandidates(
   context: HouseholdContext,
   options: { exclude?: string[]; count?: number } = {},
 ): Promise<CandidateGeneration> {
-  if (!candidateGenerationEnabled()) return EMPTY;
+  if (!candidateGenerationEnabled()) return empty("disabled");
 
   const model = modelFor("meal_candidate_generation");
   const prompt = buildPrompt(context, options.exclude ?? [], options.count ?? TARGET);
@@ -151,7 +164,13 @@ export async function generateMealCandidates(
 
     const parsed = resultSchema.safeParse(JSON.parse(response.text));
     if (!parsed.success) {
-      return { ...EMPTY, model, error: "candidate output failed validation" };
+      const paths = parsed.error.issues.slice(0, 5).map((issue) => issue.path.join("."));
+      // eslint-disable-next-line no-console
+      console.error(
+        "[candidates] output failed validation",
+        JSON.stringify({ model, paths, chars: response.text.length }),
+      );
+      return empty("failed", model, "schema_invalid", `candidate output failed validation: ${paths.join(", ")}`);
     }
 
     const searchQueries = new Map<string, string>();
@@ -161,9 +180,33 @@ export async function generateMealCandidates(
       return recipe;
     });
 
-    return { recipes, searchQueries, model, usage: response.usage, error: null };
+    // eslint-disable-next-line no-console
+    console.info(
+      "[candidates]",
+      JSON.stringify({ model, count: recipes.length, attempts: response.attempts }),
+    );
+
+    return {
+      recipes,
+      searchQueries,
+      model,
+      usage: response.usage,
+      outcome: "generated",
+      failureKind: null,
+      error: null,
+    };
   } catch (error) {
-    return { ...EMPTY, model, error: (error as Error).message };
+    // A provider failure used to be swallowed into an empty result, which the
+    // rest of the pipeline could not tell apart from "the model had no ideas".
+    // Production then looked like stale static recommendations while Gemini was
+    // failing on every call. It is now typed, logged, and carried to the route.
+    const failure = error instanceof AIFailure ? error : classifyProviderError(error);
+    // eslint-disable-next-line no-console
+    console.error(
+      "[candidates] generation failed",
+      JSON.stringify({ model, kind: failure.kind, detail: failure.message }),
+    );
+    return empty("failed", model, failure.kind, failure.message);
   }
 }
 

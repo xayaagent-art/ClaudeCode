@@ -3,7 +3,7 @@ import { ingestReceipt } from "@/lib/receipt/service";
 import { groupForReview } from "@/lib/receipt/service";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+export const maxDuration = 60;
 
 const MAX_BYTES = 12 * 1024 * 1024;
 const ACCEPTED = ["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"];
@@ -37,10 +37,26 @@ export async function POST(request: Request) {
     });
   }
 
+  const startedAt = Date.now();
+
   return handle(async () => {
     const bytes = Buffer.from(await file.arrayBuffer());
     const result = await ingestReceipt(bytes, file.type || "image/jpeg");
     const buckets = groupForReview(result.items);
+
+    // Sizes and counts only — never the image, the prompt, or the model reply.
+    // eslint-disable-next-line no-console
+    console.info(
+      "[receipts/parse]",
+      JSON.stringify({
+        ms: Date.now() - startedAt,
+        parser: result.parser,
+        bytes: bytes.length,
+        items: result.items.length,
+        review: buckets.review.length,
+        duplicate: Boolean(result.duplicate_of),
+      }),
+    );
     return {
       receipt: result.receipt,
       items: result.items,
