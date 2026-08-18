@@ -36,11 +36,15 @@ function inspectSupabaseKey(): Record<string, unknown> {
   const parts = trimmed.split(".");
 
   if (parts.length !== 3) {
-    // Newer projects issue `sb_secret_...` keys, which are not JWTs at all and
-    // could never produce this error — worth knowing which shape is in play.
+    // Newer projects issue `sb_secret_...` / `sb_publishable_...` keys, which
+    // are not JWTs at all. The distinction matters enormously and the prefix is
+    // not secret: a publishable key in the service-role slot fails every write
+    // under RLS while looking, from the outside, like a broken database.
+    const prefix = /^(sb_[a-z]+_)/.exec(trimmed)?.[1] ?? null;
     return {
       present: true,
-      format: trimmed.startsWith("sb_") ? "sb_secret" : "unrecognised",
+      format: prefix ? "supabase_api_key" : "unrecognised",
+      prefix,
       length: trimmed.length,
       whitespace_damaged: whitespaceDamaged,
     };
@@ -74,10 +78,41 @@ function inspectSupabaseKey(): Record<string, unknown> {
   }
 }
 
+/**
+ * What PostgREST says when the configured credential is used directly.
+ *
+ * The adapter's error — "JWT issued at future" — arrives with no status code
+ * and no indication of which layer rejected it, and the same sentence can mean
+ * a forward-dated token, the wrong key entirely, or a key the gateway never
+ * accepted. One raw request against a table that definitely exists answers it:
+ * the status distinguishes auth failure (401) from RLS refusal (200 with an
+ * empty array) from a project mismatch (404).
+ */
+async function probeSupabaseRest(): Promise<Record<string, unknown>> {
+  const url = process.env.SUPABASE_URL?.trim();
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+  if (!url || !key) return { checked: false };
+
+  const askedAt = Date.now();
+  try {
+    const response = await fetch(`${url}/rest/v1/households?select=id&limit=1`, {
+      headers: { apikey: key, authorization: `Bearer ${key}` },
+      signal: AbortSignal.timeout(8_000),
+    });
+    // The body is either an id we already know or PostgREST's own error text.
+    // Neither is sensitive, and without it there is nothing to diagnose from.
+    const body = (await response.text()).slice(0, 300);
+    return { checked: true, status: response.status, ms: Date.now() - askedAt, body };
+  } catch (error) {
+    return { checked: true, ok: false, ms: Date.now() - askedAt, error: (error as Error).message };
+  }
+}
+
 export interface HealthReport {
   config: Record<string, unknown>;
   supabase_key: Record<string, unknown>;
   database: Record<string, unknown>;
+  supabase_rest: Record<string, unknown>;
   gemini: Record<string, unknown>;
   openai: Record<string, unknown>;
   ms: number;
@@ -113,10 +148,34 @@ async function probeOpenAI(live: boolean): Promise<Record<string, unknown>> {
   };
   if (!live) return report;
 
+  // Variants, cheapest question first. A 400 tells you the request was wrong
+  // but not which part of it, and these models are new enough that "which
+  // parameter does this one accept" is not answerable from documentation this
+  // build was written against. Each variant changes exactly one thing, so the
+  // first one that succeeds names the cause.
+  report.live = [
+    await probeOnce("resolved model, reasoning=low", mealModel, "low"),
+    await probeOnce("resolved model, no reasoning", mealModel, undefined),
+    await probeOnce("gpt-5 baseline", "gpt-5", "low"),
+  ];
+  return report;
+}
+
+/**
+ * One trivial structured request. The prompt is a fixed literal with no
+ * household data in it, which is what makes it safe to report the provider's
+ * own error text verbatim — the thing every other call path deliberately
+ * withholds, because there a provider message can quote receipt contents.
+ */
+async function probeOnce(
+  label: string,
+  model: string,
+  reasoning: "minimal" | "low" | undefined,
+): Promise<Record<string, unknown>> {
   const askedAt = Date.now();
   try {
     const result = await structuredCall({
-      model: mealModel,
+      model,
       system: "Reply with JSON only.",
       prompt: 'Return exactly {"ok":true}',
       schemaName: "probe",
@@ -130,9 +189,10 @@ async function probeOpenAI(live: boolean): Promise<Record<string, unknown>> {
       // text appears, so a small ceiling proves nothing except that the ceiling
       // was small.
       maxOutputTokens: 2000,
-      reasoning: "minimal",
+      ...(reasoning ? { reasoning } : {}),
     });
-    report.live = {
+    return {
+      label,
       ok: true,
       model: result.model,
       ms: Date.now() - askedAt,
@@ -143,16 +203,19 @@ async function probeOpenAI(live: boolean): Promise<Record<string, unknown>> {
       reply: result.text.slice(0, 80),
     };
   } catch (error) {
-    const failure = error as Error & { kind?: string };
-    report.live = {
+    const failure = error as Error & { kind?: string; cause?: unknown };
+    const cause = failure.cause as { status?: number; message?: string } | undefined;
+    return {
+      label,
       ok: false,
-      model: mealModel,
+      model,
       ms: Date.now() - askedAt,
       kind: failure.kind ?? failure.name,
       detail: failure.message,
+      status: cause?.status ?? null,
+      provider_message: cause?.message?.slice(0, 400) ?? null,
     };
   }
-  return report;
 }
 
 export async function healthReport(live: boolean): Promise<HealthReport> {
@@ -236,6 +299,7 @@ export async function healthReport(live: boolean): Promise<HealthReport> {
   return {
     config,
     supabase_key: inspectSupabaseKey(),
+    supabase_rest: await probeSupabaseRest(),
     database,
     gemini,
     openai,
