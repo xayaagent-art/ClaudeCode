@@ -2,6 +2,7 @@ import Link from "next/link";
 import { persistenceKind } from "@/lib/db";
 import { activeProviderName } from "@/lib/ai";
 import { modelRouting } from "@/lib/ai/models";
+import { openAIModelHint } from "@/lib/ai/openai-models";
 import { youtubeProvider } from "@/lib/video/youtube";
 
 export const dynamic = "force-dynamic";
@@ -34,7 +35,7 @@ export default function DiagnosticsPage() {
         provider === "gemini"
           ? `Gemini vision (${models.receipt_parse})`
           : provider === "openai"
-            ? "OpenAI vision"
+            ? `OpenAI vision (${openAIModelHint("receipt_vision")})`
             : "Mock mode (bundled fixture)",
     },
     {
@@ -46,7 +47,9 @@ export default function DiagnosticsPage() {
       value:
         provider === "gemini"
           ? `Gemini (${models.meal_candidate_generation})`
-          : "Built-in recipe library only",
+          : provider === "openai"
+            ? `OpenAI (${openAIModelHint("meal_generation")})`
+            : "Built-in recipe library only",
     },
     {
       label: "Nutrition data",

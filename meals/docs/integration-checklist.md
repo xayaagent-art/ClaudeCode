@@ -63,17 +63,22 @@ signals, receipt telemetry. Also private storage for receipt images.
 ## 2. OpenAI
 
 **Purpose.** Real multimodal receipt parsing (`lib/ai/providers/openai-provider.ts`)
-and recipe discovery beyond the built-in catalog (`lib/meals/discover.ts`).
+and dynamic meal candidate generation (`lib/meals/candidates.ts`). Both go
+through one client, `lib/ai/openai-call.ts`, on the Responses API with strict
+Structured Outputs.
 
 | | |
 | --- | --- |
-| Environment variables | `OPENAI_API_KEY`, plus optional `OPENAI_MODEL` / `OPENAI_RECEIPT_MODEL` |
+| Environment variables | `OPENAI_API_KEY`, plus `AI_PROVIDER=openai` to activate |
+| Model overrides | `OPENAI_RECEIPT_MODEL`, `OPENAI_MEAL_MODEL`. All routing lives in `lib/ai/openai-models.ts` — no model id appears anywhere else |
+| Model resolution | With no override the app asks `/v1/models` what this key can actually see and picks the best match per task, preferring the Luna/Terra ids and falling back through GPT-5 tiers. A marketing name is not an API id, and a guessed one 404s in a way that looks exactly like a broken integration — so nothing is guessed. The catalogue is fetched once per process |
 | Where to get it | <https://platform.openai.com/api-keys> |
 | Free tier | No. Pay-as-you-go |
 | Expected testing cost | ~**$0.02–0.05 per receipt** (one high-detail image + ~2–4k output tokens on a GPT-5-class model). A 20-receipt test run is under $1. `OPENAI_RECEIPT_MODEL` can point transcription at a cheaper model |
-| Optional tuning | `OPENAI_TIMEOUT_MS` (default 60000), `OPENAI_MAX_ATTEMPTS` (default 3), `OPENAI_RETRY_BASE_MS` (default 1000) |
-| Cost controls already built | Uploads are sniffed by magic bytes first, so a non-image never reaches the model. Images are sha256-hashed, so re-uploading the same photo never re-parses. Learned store mappings resolve known lines without a model call. Retries are limited to transient failures only — a bad image or a schema violation is never retried. No household history is sent with a receipt parse |
-| How to validate | Set `AI_PROVIDER=openai` and `OPENAI_API_KEY`, scan a real receipt, then check the `receipt_telemetry` table for provider, model, latency, tokens, estimated cost, attempt count and confidence banding |
+| Optional tuning | `OPENAI_TIMEOUT_MS` (per attempt, default 30000), `OPENAI_BUDGET_MS` (all attempts, default 40000), `OPENAI_MAX_ATTEMPTS` (default 3), `OPENAI_RETRY_BASE_MS` (default 1000), `DYNAMIC_MEALS=off` for library-only recommendations |
+| Reasoning | Receipts run at `minimal` — transcription has nothing to reason about, and reasoning tokens come out of the same allowance as the reply. Meal generation runs at `low`. A model that rejects the parameter is detected from its 400 and retried without it, once per process |
+| Cost controls already built | Uploads are sniffed by magic bytes first, so a non-image never reaches the model. Images are sha256-hashed, so re-uploading the same photo never re-parses. Learned store mappings resolve known lines without a model call. Retries are limited to transient failures only — a bad image or a schema violation is never retried. No household history is sent with a receipt parse. One vision request per receipt; one generation request per refresh, for ~14 candidates |
+| How to validate | Set `AI_PROVIDER=openai` and `OPENAI_API_KEY`, then open `/settings/diagnostics/live?live=1` — it lists the models the key can see, what each task resolved to, and the result of one trivial live request. Scan a real receipt and check the `receipt_telemetry` table for provider, model, latency, tokens, estimated cost, attempt count and confidence banding |
 | Without it | `AI_PROVIDER=mock` replays a bundled fixture, labelled in the UI as mock. With `AI_PROVIDER=openai` **and no key**, scanning fails with a clear error — it does **not** fall back to fixture data |
 
 **Failure handling.** Every way a parse can fail has its own message and its own
@@ -86,7 +91,7 @@ answer to whether a retry is worth offering:
 | `truncated` | No | Receipt too long to transcribe in one reply |
 | `schema_invalid` | Yes | Reply was not valid JSON, or every line failed the contract |
 | `rate_limit` | Yes | Provider 429. Honours `Retry-After` |
-| `timeout` | Yes | Attempt exceeded `OPENAI_TIMEOUT_MS` |
+| `timeout` | Yes | Attempt exceeded `OPENAI_TIMEOUT_MS`, or the whole call exceeded `OPENAI_BUDGET_MS` |
 | `api_error` | Yes | 5xx, connection reset, or anything unclassified |
 | `partial` | n/a | Some lines dropped; the receipt is kept and marked `partially_parsed`, and the user is told how many are missing |
 
@@ -116,7 +121,7 @@ meal candidate generation (`lib/meals/candidates.ts`).
 | One candidate-generation request per refresh, no tool loops | `generateMealCandidates` |
 | Re-uploading the same photo never re-parses | image sha256 in `ingestReceipt` |
 | Non-images never reach the model | `assertReadableImage` |
-| Video search runs after ranking, on 3 dishes plus a small buffer — not on all 16 candidates | `recommendMeals` |
+| Video search runs after ranking, on 3 dishes plus a small buffer — not on all 14 candidates | `recommendMeals` |
 | A cooked dish is remembered, so it never needs generating or searching again | `logMeal` + `worthRemembering` |
 
 > **Price table caveat.** The Gemini entries in `lib/ai/pricing.ts` are

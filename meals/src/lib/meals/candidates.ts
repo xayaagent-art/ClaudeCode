@@ -1,9 +1,11 @@
 import "server-only";
 import { z } from "zod";
-import { generateContent } from "@/lib/ai/gemini";
+import { generateContent, geminiConfigured, toGeminiSchema } from "@/lib/ai/gemini";
 import { AIFailure, classifyProviderError, type AIFailureKind } from "@/lib/ai/failure";
 import { modelFor, thinkingLevelFor } from "@/lib/ai/models";
-import { geminiConfigured } from "@/lib/ai/gemini";
+import { openAIConfigured, structuredCall } from "@/lib/ai/openai-call";
+import { openAIModelFor } from "@/lib/ai/openai-models";
+import { activeProviderName } from "@/lib/ai/provider";
 import { canonicalName } from "@/lib/kitchen/match";
 import { canonicalRecipeKey } from "@/lib/meals/memory";
 import { estimateRecipeNutrition } from "@/lib/nutrition/estimate";
@@ -22,6 +24,11 @@ import type { HouseholdContext, Recipe } from "@/lib/types";
  * — what to cook, roughly what goes in it, roughly how long. The code decides:
  * every hard dietary filter, every score, and all nutrition arithmetic stay
  * deterministic. A candidate is a suggestion until the ranker agrees with it.
+ *
+ * Which model proposes them is a deployment decision, not an architectural one.
+ * Both providers answer the same schema and return the same `Recipe` shape, so
+ * everything downstream — ranking, memory, video resolution, persistence — is
+ * identical whichever one ran.
  */
 
 const candidateSchema = z.object({
@@ -42,15 +49,23 @@ const resultSchema = z.object({ candidates: z.array(candidateSchema) });
 
 export type MealConcept = z.infer<typeof candidateSchema>;
 
-/** Gemini's responseSchema dialect: no additionalProperties, no type unions. */
-const responseSchema = {
+/**
+ * The contract, written once in OpenAI's strict Structured Outputs dialect —
+ * every property required, `additionalProperties: false` throughout — and
+ * converted for Gemini at the call site. Two hand-maintained copies of a schema
+ * drift, and the drift shows up as a validation failure in production rather
+ * than as a diff.
+ */
+const candidateJsonSchema = {
   type: "object",
+  additionalProperties: false,
   required: ["candidates"],
   properties: {
     candidates: {
       type: "array",
       items: {
         type: "object",
+        additionalProperties: false,
         required: [
           "title", "cuisine", "description", "likely_ingredients",
           "estimated_cook_minutes", "dietary_tags", "protein_intent",
@@ -98,11 +113,11 @@ Rules:
 - estimated_cook_minutes is active cooking time, honestly estimated.`;
 
 export type CandidateOutcome =
-  /** Gemini answered and the concepts validated. */
+  /** The model answered and the concepts validated. */
   | "generated"
   /** Not configured for dynamic meals at all — an expected, quiet state. */
   | "disabled"
-  /** Gemini was asked and did not deliver. Never quiet. */
+  /** The model was asked and did not deliver. Never quiet. */
   | "failed";
 
 export interface CandidateGeneration {
@@ -127,11 +142,35 @@ function empty(
   return { recipes: [], searchQueries: new Map(), model, usage: null, outcome, failureKind, error };
 }
 
-/** How many concepts to ask for. Enough for the ranker to be selective. */
-const TARGET = 12;
+/**
+ * How many concepts to ask for. Enough for the ranker to be selective, few
+ * enough that one request covers a refresh — the whole point of generating in
+ * a single call is that the cost per refresh is one call, not a dozen.
+ */
+const TARGET = 14;
 
+/** Whether the active provider can generate, and whether it is switched on. */
 export function candidateGenerationEnabled(): boolean {
-  return geminiConfigured() && process.env.DYNAMIC_MEALS !== "off";
+  if (process.env.DYNAMIC_MEALS === "off") return false;
+  switch (activeProviderName()) {
+    case "openai":
+      return openAIConfigured();
+    case "gemini":
+      return geminiConfigured();
+    default:
+      // Mock mode never generates. Fixture recipes are the demo, and blending
+      // them with real ones is exactly the confusion the provider split exists
+      // to prevent.
+      return false;
+  }
+}
+
+/** What one provider call returns, before it becomes recipes. */
+interface RawGeneration {
+  text: string;
+  model: string;
+  usage: AIUsage;
+  attempts: number;
 }
 
 /**
@@ -148,30 +187,24 @@ export async function generateMealCandidates(
 ): Promise<CandidateGeneration> {
   if (!candidateGenerationEnabled()) return empty("disabled");
 
-  const model = modelFor("meal_candidate_generation");
+  const provider = activeProviderName();
   const prompt = buildPrompt(context, options.exclude ?? [], options.count ?? TARGET);
+  let model = provider === "openai" ? "pending" : modelFor("meal_candidate_generation");
 
   try {
-    const response = await generateContent({
-      model,
-      system: SYSTEM,
-      prompt,
-      responseSchema: responseSchema as unknown as Record<string, unknown>,
-      // Sized from the schema: each candidate is nine fields, roughly 120-160
-      // output tokens once the ingredient list and the two prose fields are
-      // counted. Twelve of those is ~2k, so 8k leaves room for a long set plus
-      // the reasoning allowance without inviting a truncated reply.
-      maxOutputTokens: 8000,
-      thinkingLevel: thinkingLevelFor("meal_candidate_generation"),
-    });
+    const raw =
+      provider === "openai"
+        ? await generateWithOpenAI(prompt)
+        : await generateWithGemini(prompt, model);
+    model = raw.model;
 
-    const parsed = resultSchema.safeParse(JSON.parse(response.text));
+    const parsed = resultSchema.safeParse(JSON.parse(raw.text));
     if (!parsed.success) {
       const paths = parsed.error.issues.slice(0, 5).map((issue) => issue.path.join("."));
       // eslint-disable-next-line no-console
       console.error(
         "[candidates] output failed validation",
-        JSON.stringify({ model, paths, chars: response.text.length }),
+        JSON.stringify({ provider, model, paths, chars: raw.text.length }),
       );
       return empty("failed", model, "schema_invalid", `candidate output failed validation: ${paths.join(", ")}`);
     }
@@ -186,14 +219,14 @@ export async function generateMealCandidates(
     // eslint-disable-next-line no-console
     console.info(
       "[candidates]",
-      JSON.stringify({ model, count: recipes.length, attempts: response.attempts }),
+      JSON.stringify({ provider, model, count: recipes.length, attempts: raw.attempts }),
     );
 
     return {
       recipes,
       searchQueries,
       model,
-      usage: response.usage,
+      usage: raw.usage,
       outcome: "generated",
       failureKind: null,
       error: null,
@@ -201,16 +234,54 @@ export async function generateMealCandidates(
   } catch (error) {
     // A provider failure used to be swallowed into an empty result, which the
     // rest of the pipeline could not tell apart from "the model had no ideas".
-    // Production then looked like stale static recommendations while Gemini was
-    // failing on every call. It is now typed, logged, and carried to the route.
+    // Production then looked like stale static recommendations while the
+    // provider was failing on every call. It is now typed, logged, and carried
+    // to the route.
     const failure = error instanceof AIFailure ? error : classifyProviderError(error);
     // eslint-disable-next-line no-console
     console.error(
       "[candidates] generation failed",
-      JSON.stringify({ model, kind: failure.kind, detail: failure.message }),
+      JSON.stringify({ provider, model, kind: failure.kind, detail: failure.message }),
     );
     return empty("failed", model, failure.kind, failure.message);
   }
+}
+
+async function generateWithOpenAI(prompt: string): Promise<RawGeneration> {
+  const model = await openAIModelFor("meal_generation");
+  const result = await structuredCall({
+    model,
+    system: SYSTEM,
+    prompt,
+    schemaName: "meal_candidates",
+    schema: candidateJsonSchema as unknown as Record<string, unknown>,
+    // Sized from the schema: each candidate is nine fields, roughly 120-160
+    // output tokens once the ingredient list and the two prose fields are
+    // counted. Fourteen of those is ~2.5k, so 8k leaves room for a long set
+    // plus the reasoning allowance without inviting a truncated reply.
+    maxOutputTokens: 8000,
+    // Proposing a varied set that respects constraints benefits from a little
+    // planning. More than "low" buys rumination, not better dinners.
+    reasoning: "low",
+  });
+  return { text: result.text, model: result.model, usage: result.usage, attempts: result.attempts };
+}
+
+async function generateWithGemini(prompt: string, model: string): Promise<RawGeneration> {
+  const response = await generateContent({
+    model,
+    system: SYSTEM,
+    prompt,
+    responseSchema: toGeminiSchema(candidateJsonSchema),
+    maxOutputTokens: 8000,
+    thinkingLevel: thinkingLevelFor("meal_candidate_generation"),
+  });
+  return {
+    text: response.text,
+    model: response.model,
+    usage: response.usage,
+    attempts: response.attempts,
+  };
 }
 
 /**

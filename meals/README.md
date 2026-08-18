@@ -171,21 +171,28 @@ The service-role key is server-only and is never sent to the browser.
 
 ## OpenAI setup
 
-Set `OPENAI_API_KEY`. `OPENAI_MODEL` defaults to `gpt-5`; any Responses API
-model with image input and structured outputs works.
+Set `OPENAI_API_KEY` and `AI_PROVIDER=openai`.
 
-The API is used in exactly two places:
+Model ids are **discovered, not assumed**. `lib/ai/openai-models.ts` asks
+`/v1/models` what the key can actually see and resolves one id per task,
+preferring the Luna id for vision and the Terra id for generation and falling
+back through the GPT-5 tiers. Pin either with `OPENAI_RECEIPT_MODEL` /
+`OPENAI_MEAL_MODEL`, which skip discovery entirely. No model id appears anywhere
+else in the codebase.
 
-- **Receipt vision** (`lib/receipt/parse.ts`) — one call, strict JSON schema,
-  validated with zod before anything is persisted.
-- **Recipe discovery** (`lib/meals/discover.ts`) — only when the built-in
-  library cannot cover the kitchen. Web search is enabled here (disable with
-  `RECIPE_WEB_SEARCH=off`) because knowing what a dish really is beats inventing
-  one. Nothing is reproduced verbatim: the model returns ingredients, metadata
-  and its own concise method, and the source URL is stored and shown.
+The API is used in exactly two places, both through `lib/ai/openai-call.ts` —
+one client, one timeout budget, one retry policy, one failure taxonomy:
 
-Discovery failures are swallowed by design — a recommendation request must never
-fail because an optional enhancement did.
+- **Receipt vision** (`lib/ai/providers/openai-provider.ts`) — one call per
+  receipt, strict JSON schema, validated with zod before anything is persisted.
+- **Meal candidate generation** (`lib/meals/candidates.ts`) — one call per
+  refresh for ~14 concepts. The model proposes dishes; the code decides. Every
+  dietary filter, every ranking score and all nutrition arithmetic stay
+  deterministic, so a candidate is a suggestion until the ranker agrees with it.
+
+Generation failing is not fatal — the household's own library still answers the
+question — but it is never silent: the failure is typed, logged and carried back
+to the route. Real mode never falls back to fixture data.
 
 ---
 
@@ -310,8 +317,7 @@ recommendation picked → RecipeDiscoveryService
     A. already-normalized catalog / saved recipe   ← free, no network
     B. sources this household already cooked from  ← free, no network
     C. trusted external video (YouTube)            ← costs quota, once per dish
-    D. adaptation of an existing recipe            ← discover.ts
-    E. generation                                  ← discover.ts
+    D. the dish's own generated summary            ← candidates.ts
 → source cached on the recipe → reused forever
 ```
 

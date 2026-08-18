@@ -3,7 +3,6 @@ import { z } from "zod";
 import { getDb } from "@/lib/db";
 import { todayISO } from "@/lib/date";
 import { buildHouseholdContext } from "@/lib/household/context";
-import { discoverRecipes } from "@/lib/meals/discover";
 import { logMeal } from "@/lib/meals/log";
 import { resolveNutrition } from "@/lib/nutrition/sources";
 import { assessRecipe } from "@/lib/kitchen/match";
@@ -64,12 +63,6 @@ export const tools = {
           recipe.ingredients.some((i) => i.ingredient_name.toLowerCase().includes(needle)),
       )
       .slice(0, limit);
-  },
-
-  /** Model-driven discovery, web search included. Returns normalized recipes. */
-  async search_web_for_recipes(count = 2) {
-    const { context } = await buildHouseholdContext("dinner", todayISO());
-    return discoverRecipes(context, count, []);
   },
 
   async search_nutrition_database(productName: string) {

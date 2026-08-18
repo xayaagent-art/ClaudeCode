@@ -3,6 +3,8 @@ import { getDb, persistenceKind } from "@/lib/db";
 import { activeProviderName } from "@/lib/ai";
 import { modelRouting } from "@/lib/ai/models";
 import { generateContent, geminiConfigured } from "@/lib/ai/gemini";
+import { openAIConfigured, structuredCall } from "@/lib/ai/openai-call";
+import { listOpenAIModels, modelDiscoveryError, openAIModelFor } from "@/lib/ai/openai-models";
 import { candidateGenerationEnabled } from "@/lib/meals/candidates";
 import { youtubeProvider } from "@/lib/video/youtube";
 
@@ -77,7 +79,80 @@ export interface HealthReport {
   supabase_key: Record<string, unknown>;
   database: Record<string, unknown>;
   gemini: Record<string, unknown>;
+  openai: Record<string, unknown>;
   ms: number;
+}
+
+/**
+ * Does the configured OpenAI key work, and which models can it actually see?
+ *
+ * This exists because model ids are discovered rather than assumed. A marketing
+ * name is not an API id, guessing one produces a 404 that looks exactly like a
+ * broken integration, and no sandbox here can reach api.openai.com to check. So
+ * the deployment answers the question itself: list the catalogue, report what
+ * each task resolved to, then spend one trivial request proving the resolved
+ * model responds.
+ */
+async function probeOpenAI(live: boolean): Promise<Record<string, unknown>> {
+  if (!openAIConfigured()) return { checked: false, key_present: false };
+
+  const catalogue = await listOpenAIModels();
+  const [receiptModel, mealModel] = await Promise.all([
+    openAIModelFor("receipt_vision"),
+    openAIModelFor("meal_generation"),
+  ]);
+
+  const report: Record<string, unknown> = {
+    checked: true,
+    key_present: true,
+    models_visible: catalogue.length,
+    // The GPT-family ids only: the full list is long and mostly irrelevant here.
+    gpt_models: catalogue.filter((id) => id.startsWith("gpt-")).slice(0, 40),
+    discovery_error: modelDiscoveryError(),
+    resolved: { receipt_vision: receiptModel, meal_generation: mealModel },
+  };
+  if (!live) return report;
+
+  const askedAt = Date.now();
+  try {
+    const result = await structuredCall({
+      model: mealModel,
+      system: "Reply with JSON only.",
+      prompt: 'Return exactly {"ok":true}',
+      schemaName: "probe",
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["ok"],
+        properties: { ok: { type: "boolean" } },
+      },
+      // Not tiny. These models spend part of the allowance reasoning before any
+      // text appears, so a small ceiling proves nothing except that the ceiling
+      // was small.
+      maxOutputTokens: 2000,
+      reasoning: "minimal",
+    });
+    report.live = {
+      ok: true,
+      model: result.model,
+      ms: Date.now() - askedAt,
+      attempts: result.attempts,
+      input_tokens: result.usage.input_tokens,
+      output_tokens: result.usage.output_tokens,
+      reasoning_tokens: result.reasoningTokens,
+      reply: result.text.slice(0, 80),
+    };
+  } catch (error) {
+    const failure = error as Error & { kind?: string };
+    report.live = {
+      ok: false,
+      model: mealModel,
+      ms: Date.now() - askedAt,
+      kind: failure.kind ?? failure.name,
+      detail: failure.message,
+    };
+  }
+  return report;
 }
 
 export async function healthReport(live: boolean): Promise<HealthReport> {
@@ -91,7 +166,7 @@ export async function healthReport(live: boolean): Promise<HealthReport> {
     storage: persistenceKind(),
     youtube: youtubeProvider.enabled(),
     // Presence only — never a value, for any key.
-    openai_key_present: Boolean(process.env.OPENAI_API_KEY),
+    openai_key_present: openAIConfigured(),
   };
 
   // Database reachability plus the recipe-id invariant against real rows: can
@@ -115,8 +190,11 @@ export async function healthReport(live: boolean): Promise<HealthReport> {
     database = { reachable: false, error: (error as Error).message };
   }
 
-  let gemini: Record<string, unknown> = { checked: false };
-  if (live && geminiConfigured()) {
+  let gemini: Record<string, unknown> = { checked: false, key_present: geminiConfigured() };
+  // Only the active provider is exercised. Gemini stays present and dormant
+  // under AI_PROVIDER=openai, and a health check must not spend on a provider
+  // the app is not currently using.
+  if (live && geminiConfigured() && activeProviderName() === "gemini") {
     const model = modelRouting().meal_candidate_generation;
     const askedAt = Date.now();
     try {
@@ -153,5 +231,14 @@ export async function healthReport(live: boolean): Promise<HealthReport> {
     }
   }
 
-  return { config, supabase_key: inspectSupabaseKey(), database, gemini, ms: Date.now() - startedAt };
+  const openai = await probeOpenAI(live && activeProviderName() === "openai");
+
+  return {
+    config,
+    supabase_key: inspectSupabaseKey(),
+    database,
+    gemini,
+    openai,
+    ms: Date.now() - startedAt,
+  };
 }

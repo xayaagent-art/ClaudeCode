@@ -1,6 +1,7 @@
 import type { HouseholdContext, InventoryItem, RankingFactors, Recipe } from "@/lib/types";
 import { assessRecipe, canonicalName, type RecipeAvailability } from "@/lib/kitchen/match";
 import { currentConfidence } from "@/lib/kitchen/state";
+import { animalProductsIn } from "@/lib/meals/diet";
 
 /**
  * Transparent weighted ranking.
@@ -31,17 +32,27 @@ function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
 
-/** Hard filters. These are safety and dietary rules, never soft-scored. */
+/**
+ * Hard filters. These are safety and dietary rules, never soft-scored.
+ *
+ * Dietary enforcement reads tags *and* ingredients. Tags used to be the whole
+ * check, which made the filter only as honest as whoever wrote the tag — and
+ * since recipes are now proposed by a model, an omitted `contains_chicken`
+ * would have been enough to put chicken in front of someone who does not eat
+ * it. `animalProductsIn` corroborates the two, so a mis-tagged recipe is still
+ * rejected on what is actually in it.
+ */
 export function isEligible(recipe: Recipe, context: HouseholdContext): boolean {
   const prefs = context.preferences;
-  const tags = recipe.dietary_tags;
   const ingredientNames = recipe.ingredients.map((i) => canonicalName(i.ingredient_name));
+  const animal = animalProductsIn(recipe);
 
-  if (tags.includes("contains_chicken") && !prefs.chicken_allowed) return false;
-  if (tags.includes("contains_eggs") && !prefs.eggs_allowed) return false;
-  if (prefs.vegetarian && tags.some((t) => t === "contains_beef" || t === "contains_pork")) {
-    return false;
-  }
+  if (animal.has("chicken") && !prefs.chicken_allowed) return false;
+  if (animal.has("egg") && !prefs.eggs_allowed) return false;
+  // Vegetarian rules out red meat and seafood. Chicken is governed separately,
+  // because this household describes itself as vegetarian and still eats it
+  // occasionally — collapsing the two would silently overrule that.
+  if (prefs.vegetarian && (animal.has("red_meat") || animal.has("seafood"))) return false;
 
   for (const allergy of prefs.allergies) {
     const canonicalAllergy = canonicalName(allergy);

@@ -3,7 +3,6 @@ import { getDb } from "@/lib/db";
 import { todayISO } from "@/lib/date";
 import { buildHouseholdContext } from "@/lib/household/context";
 import { generateMealCandidates } from "@/lib/meals/candidates";
-import { discoverRecipes } from "@/lib/meals/discover";
 import { resolveSourcesFor } from "@/lib/meals/discovery-service";
 import {
   canonicalRecipeKey,
@@ -223,23 +222,14 @@ export async function recommendMeals(options: {
   }));
   scored.sort((a, b) => b.score - a.score);
 
-  let discoveryUsed = fresh.length > 0;
+  const discoveryUsed = fresh.length > 0;
 
-  // Legacy OpenAI discovery, kept as a last resort for a kitchen that neither
-  // memory nor Gemini could cover. Only runs when an OpenAI key is configured.
-  const strongEnough = scored.filter((s) => s.availability.ratio >= MIN_AVAILABILITY);
-  if (strongEnough.length < count && fresh.length === 0) {
-    const extra = await discoverRecipes(
-      context,
-      count - strongEnough.length,
-      scored.slice(0, 5).map((s) => s.recipe.title),
-    );
-    if (extra.length > 0) {
-      discoveryUsed = true;
-      for (const recipe of extra) await db.upsertRecipe(recipe);
-      scored = rankRecipes([...pool, ...extra], inventory, context, today);
-    }
-  }
+  // There used to be a second generator here — an older OpenAI discovery call
+  // that ran when the first one came up short. It had its own model name, its
+  // own prompt, took nutrition numbers straight from the model, and wrote
+  // recipes without the read-back that makes an id safe to link to. Two paths
+  // producing recipes with different guarantees is how a dish reached the
+  // screen that its own detail page could not find. Generation is one path now.
 
   // A rename is not novelty. On an explicit regeneration, anything that is
   // effectively the same dinner as one just shown is removed outright rather

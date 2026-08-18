@@ -168,6 +168,10 @@ function realMode() {
   process.env.OPENAI_API_KEY = "sk-test-not-a-real-key";
   // Keep the suite fast: the policy is what's under test, not the wall clock.
   process.env.OPENAI_RETRY_BASE_MS = "1";
+  // Pin the model, as a deployment would. Without an override the provider asks
+  // /v1/models which id to use, and that request would consume a stubbed
+  // response meant for the parse call — the discovery path has its own tests.
+  process.env.OPENAI_RECEIPT_MODEL = "gpt-5";
   resetOpenAIClient();
 }
 
@@ -177,6 +181,8 @@ beforeEach(async () => {
   delete process.env.OPENAI_API_KEY;
   delete process.env.OPENAI_RETRY_BASE_MS;
   delete process.env.OPENAI_MAX_ATTEMPTS;
+  delete process.env.OPENAI_RECEIPT_MODEL;
+  delete process.env.OPENAI_MEAL_MODEL;
   resetOpenAIClient();
   await resetLocalDatabase();
 });

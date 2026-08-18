@@ -1,12 +1,14 @@
 import "server-only";
-import OpenAI from "openai";
-import { estimateCostUsd } from "@/lib/ai/pricing";
 import { AIFailure } from "@/lib/ai/failure";
-import { withRetry } from "@/lib/ai/retry";
+import { structuredCall, resetOpenAIClient as resetClient } from "@/lib/ai/openai-call";
+import {
+  openAIModelFor,
+  openAIModelHint,
+  resetOpenAIModelCatalogue,
+} from "@/lib/ai/openai-models";
 import {
   AIConfigurationError,
   type AIProvider,
-  type AIUsage,
   type ImageInput,
   type ReceiptParseResult,
 } from "@/lib/ai/provider";
@@ -26,36 +28,10 @@ import { RECEIPT_SYSTEM_PROMPT, receiptJsonSchema } from "@/lib/receipt/schema";
  * could obtain it.
  */
 
-let client: OpenAI | null = null;
-
-/** Wall-clock ceiling for a single attempt. A long receipt at high detail is slow. */
-function timeoutMs(): number {
-  const configured = Number(process.env.OPENAI_TIMEOUT_MS);
-  if (Number.isFinite(configured) && configured > 0) return configured;
-  return 60_000;
-}
-
-function missingKey(): AIConfigurationError {
-  return new AIConfigurationError(
-    "AI_PROVIDER=openai but OPENAI_API_KEY is not set",
-    "Receipt scanning isn't configured on the server yet.",
-  );
-}
-
-function openai(): OpenAI {
-  if (!client) {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) throw missingKey();
-    // maxRetries: 0 hands retry policy to withRetry, so backoff and the retry
-    // count are ours to reason about and to test.
-    client = new OpenAI({ apiKey, maxRetries: 0, timeout: timeoutMs() });
-  }
-  return client;
-}
-
-/** Test seam: the memoised client must not outlive a changed key. */
+/** Test seam: neither the client nor a discovered model may outlive a changed key. */
 export function resetOpenAIClient(): void {
-  client = null;
+  resetClient();
+  resetOpenAIModelCatalogue();
 }
 
 const USER_PROMPT = `Transcribe this grocery receipt.
@@ -72,30 +48,49 @@ If the image is not a receipt at all, return an empty items array.`;
 export class OpenAIProvider implements AIProvider {
   readonly name = "openai" as const;
 
+  /**
+   * Synchronous, so it can only ever be a hint: the real id is resolved against
+   * the live catalogue at call time and reported in the parse result, which is
+   * what telemetry records.
+   */
   modelName(): string {
-    // A receipt is transcription, not reasoning. The model is configurable so a
-    // cheaper one can be used without touching code.
-    return process.env.OPENAI_RECEIPT_MODEL ?? process.env.OPENAI_MODEL ?? "gpt-5";
+    return openAIModelHint("receipt_vision");
   }
 
   assertReady(): void {
-    if (!process.env.OPENAI_API_KEY) throw missingKey();
+    if (!process.env.OPENAI_API_KEY) {
+      throw new AIConfigurationError(
+        "AI_PROVIDER=openai but OPENAI_API_KEY is not set",
+        "Receipt scanning isn't configured on the server yet.",
+      );
+    }
   }
 
   async parseReceipt(image: ImageInput): Promise<ReceiptParseResult> {
     this.assertReady();
-    const model = this.modelName();
+    const model = await openAIModelFor("receipt_vision");
 
-    const { value: text, attempts } = await withRetry(async () => this.callModel(image, model));
+    const result = await structuredCall({
+      model,
+      system: RECEIPT_SYSTEM_PROMPT,
+      prompt: USER_PROMPT,
+      image,
+      schemaName: "parsed_receipt",
+      schema: receiptJsonSchema as unknown as Record<string, unknown>,
+      maxOutputTokens: 8000,
+      // Reading a receipt is transcription. There is nothing to reason about,
+      // and every token spent thinking is a token not spent on a line item.
+      reasoning: "minimal",
+    });
 
     let raw: unknown;
     try {
-      raw = JSON.parse(text.output);
+      raw = JSON.parse(result.text);
     } catch {
       // Truncation and genuine malformation look alike at the JSON layer; the
       // response status tells us which happened, and the advice differs.
       throw new AIFailure(
-        text.truncated ? "truncated" : "schema_invalid",
+        result.truncated ? "truncated" : "schema_invalid",
         "model reply was not valid JSON",
       );
     }
@@ -123,79 +118,17 @@ export class OpenAIProvider implements AIProvider {
     if (receipt.total === null) {
       warnings.push("The total wasn't legible, so it hasn't been recorded.");
     }
-    if (text.truncated) {
+    if (result.truncated) {
       warnings.push("This receipt was long enough that the end may be missing.");
     }
 
     return {
       receipt,
-      model,
-      usage: text.usage,
+      model: result.model,
+      usage: result.usage,
       warnings,
-      attempts,
+      attempts: result.attempts,
       dropped_items: validated.dropped,
-    };
-  }
-
-  /** One attempt. Everything here is retryable-or-not by classification alone. */
-  private async callModel(
-    image: ImageInput,
-    model: string,
-  ): Promise<{ output: string; usage: AIUsage; truncated: boolean }> {
-    const response = await openai().responses.create(
-      {
-        model,
-        instructions: RECEIPT_SYSTEM_PROMPT,
-        input: [
-          {
-            role: "user",
-            content: [
-              { type: "input_text", text: USER_PROMPT },
-              {
-                type: "input_image",
-                image_url: `data:${image.mimeType};base64,${image.base64}`,
-                detail: "high",
-              },
-            ],
-          },
-        ],
-        text: {
-          format: {
-            type: "json_schema" as const,
-            name: "parsed_receipt",
-            strict: true,
-            schema: receiptJsonSchema as unknown as Record<string, unknown>,
-          },
-        },
-        max_output_tokens: 8000,
-      },
-      { timeout: timeoutMs() },
-    );
-
-    const truncated =
-      response.status === "incomplete" &&
-      response.incomplete_details?.reason === "max_output_tokens";
-
-    const output = response.output_text;
-    if (!output) {
-      throw new AIFailure(
-        truncated ? "truncated" : "api_error",
-        truncated ? "reply hit max_output_tokens" : "model returned no output",
-      );
-    }
-
-    const inputTokens = response.usage?.input_tokens ?? null;
-    const outputTokens = response.usage?.output_tokens ?? null;
-
-    return {
-      output,
-      truncated,
-      usage: {
-        input_tokens: inputTokens,
-        output_tokens: outputTokens,
-        total_tokens: response.usage?.total_tokens ?? null,
-        estimated_cost_usd: estimateCostUsd(model, inputTokens, outputTokens),
-      },
     };
   }
 }

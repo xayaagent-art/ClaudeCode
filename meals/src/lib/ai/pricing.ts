@@ -20,6 +20,10 @@ const PRICES: Record<string, Price> = {
   "gpt-4.1-mini": { input_per_mtok: 0.4, output_per_mtok: 1.6 },
   "gpt-4o": { input_per_mtok: 2.5, output_per_mtok: 10 },
   "gpt-4o-mini": { input_per_mtok: 0.15, output_per_mtok: 0.6 },
+  // Newer GPT-5 point releases are not listed individually: they resolve
+  // through the family-prefix fallback below to the "gpt-5" rate, which is an
+  // estimate and says so. Override with the AI_PRICE_* variables once the real
+  // rate card is known rather than guessing a number here.
 
   // Gemini. These are Flash-tier assumptions, not confirmed rate-card figures,
   // and they are here so relative cost per receipt is trackable rather than
