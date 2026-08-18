@@ -128,7 +128,7 @@ function empty(
 }
 
 /** How many concepts to ask for. Enough for the ranker to be selective. */
-const TARGET = 16;
+const TARGET = 12;
 
 export function candidateGenerationEnabled(): boolean {
   return geminiConfigured() && process.env.DYNAMIC_MEALS !== "off";
@@ -157,7 +157,7 @@ export async function generateMealCandidates(
       system: SYSTEM,
       prompt,
       responseSchema: responseSchema as unknown as Record<string, unknown>,
-      maxOutputTokens: 6000,
+      maxOutputTokens: 12000,
       // Ideas are the one place variety is the point; transcription is not.
       temperature: 0.9,
     });

@@ -41,7 +41,7 @@ function apiKey(): string {
 function timeoutMs(): number {
   const configured = Number(process.env.GEMINI_TIMEOUT_MS);
   if (Number.isFinite(configured) && configured > 0) return configured;
-  return 20_000;
+  return 30_000;
 }
 
 /**
@@ -56,17 +56,33 @@ function timeoutMs(): number {
 function budgetMs(): number {
   const configured = Number(process.env.GEMINI_BUDGET_MS);
   if (Number.isFinite(configured) && configured > 0) return configured;
-  return 25_000;
+  return 35_000;
 }
+
+/**
+ * Whether this process has learned that the model rejects thinkingConfig.
+ *
+ * Set only by an actual 400 naming it, so a model that does support the field
+ * never loses the setting, and one that does not is worked around after a
+ * single failure rather than on every call.
+ */
+let thinkingConfigRejected = false;
 
 /**
  * Generation parameters.
  *
- * Deliberately minimal. Only the fields this app actually depends on are sent,
- * because an unsupported or deprecated knob is rejected for the whole request —
+ * Deliberately minimal: an unsupported knob is rejected for the whole request,
  * and a request that fails on a parameter looks identical, from the outside, to
- * a model that had nothing to say. `temperature` is opt-in via GEMINI_TEMPERATURE
- * rather than always-on for exactly that reason.
+ * a model that had nothing to say. `temperature` is opt-in via
+ * GEMINI_TEMPERATURE rather than always-on for exactly that reason.
+ *
+ * `thinkingConfig` is the exception, and it is here because production proved
+ * it necessary. These are thinking models: asked for `{"ok":true}` with a
+ * 64-token ceiling, the deployed app got back no text at all, a finishReason of
+ * MAX_TOKENS, and a 14.8-second latency — the entire output budget had gone on
+ * internal reasoning before a single character was emitted. For transcribing a
+ * receipt and for filling a fixed JSON schema there is nothing to reason about,
+ * so the budget is spent on the answer instead.
  */
 function generationConfig(request: GeminiRequest): Record<string, unknown> {
   const config: Record<string, unknown> = {
@@ -75,12 +91,21 @@ function generationConfig(request: GeminiRequest): Record<string, unknown> {
   };
   if (request.responseSchema) config.responseSchema = request.responseSchema;
 
+  if (!thinkingConfigRejected && process.env.GEMINI_THINKING !== "on") {
+    config.thinkingConfig = { thinkingBudget: 0 };
+  }
+
   const configured = Number(process.env.GEMINI_TEMPERATURE);
   if (Number.isFinite(configured)) config.temperature = configured;
   else if (request.temperature !== undefined && process.env.GEMINI_SEND_TEMPERATURE === "true") {
     config.temperature = request.temperature;
   }
   return config;
+}
+
+/** Test seam, so one case's discovery does not leak into the next. */
+export function resetGeminiCapabilities(): void {
+  thinkingConfigRejected = false;
 }
 
 export interface InlineImage {
@@ -156,13 +181,13 @@ export async function generateContent(request: GeminiRequest): Promise<GeminiRes
     });
   }
 
-  const body: Record<string, unknown> = {
+  const buildBody = (): Record<string, unknown> => ({
     contents: [{ role: "user", parts }],
     // Canonical JSON name for the field. Proto3 JSON accepts either spelling,
     // but the documented one is what the API reference and every example use.
     systemInstruction: { parts: [{ text: request.system }] },
     generationConfig: generationConfig(request),
-  };
+  });
 
   const startedAt = Date.now();
   const budget = budgetMs();
@@ -184,7 +209,7 @@ export async function generateContent(request: GeminiRequest): Promise<GeminiRes
         // Header rather than query string, so the key never lands in a URL that
         // could be logged by a proxy or an error reporter.
         headers: { "content-type": "application/json", "x-goog-api-key": key },
-        body: JSON.stringify(body),
+        body: JSON.stringify(buildBody()),
         signal: controller.signal,
       });
     } catch (error) {
@@ -197,6 +222,18 @@ export async function generateContent(request: GeminiRequest): Promise<GeminiRes
     }
 
     if (!response.ok) {
+      // A 400 naming thinkingConfig means this model does not accept it. Drop
+      // it for the rest of the process and let the retry succeed, rather than
+      // failing every call for the lifetime of the deployment.
+      if (response.status === 400 && !thinkingConfigRejected) {
+        const detail = await response.clone().text().catch(() => "");
+        if (/thinking/i.test(detail)) {
+          thinkingConfigRejected = true;
+          // eslint-disable-next-line no-console
+          console.warn("[gemini] model rejected thinkingConfig; retrying without it");
+          throw new AIFailure("api_error", "gemini rejected thinkingConfig, retrying");
+        }
+      }
       const failure = failureForStatus(response.status, response.headers.get("retry-after"));
       // Status and model only — a provider error body can quote the prompt.
       // eslint-disable-next-line no-console

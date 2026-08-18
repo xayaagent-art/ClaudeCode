@@ -17,7 +17,7 @@ process.env.LOCAL_DB_PATH = join(scratch, "db.json");
 delete process.env.SUPABASE_URL;
 delete process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-const { generateContent } = await import("@/lib/ai/gemini");
+const { generateContent, resetGeminiCapabilities } = await import("@/lib/ai/gemini");
 const { generateMealCandidates } = await import("@/lib/meals/candidates");
 const { buildHouseholdContext } = await import("@/lib/household/context");
 const { ingestReceipt } = await import("@/lib/receipt/service");
@@ -93,6 +93,7 @@ beforeEach(async () => {
     delete process.env[key];
   }
   await resetLocalDatabase();
+  resetGeminiCapabilities();
 });
 
 afterEach(() => vi.unstubAllGlobals());
@@ -120,7 +121,14 @@ describe("gemini request payload", () => {
     const config = sent[0].body.generationConfig as Record<string, unknown>;
     // Only fields this app depends on. An unsupported knob fails the whole
     // request, and that failure is indistinguishable from an empty answer.
-    expect(Object.keys(config).sort()).toEqual(["maxOutputTokens", "responseMimeType"]);
+    expect(Object.keys(config).sort()).toEqual([
+      "maxOutputTokens",
+      "responseMimeType",
+      "thinkingConfig",
+    ]);
+    // Production evidence: without this the entire output budget goes on
+    // internal reasoning and the reply comes back empty with MAX_TOKENS.
+    expect(config.thinkingConfig).toEqual({ thinkingBudget: 0 });
     // temperature is NOT sent by default, even though the caller asked for one.
     expect(config).not.toHaveProperty("temperature");
     expect(config.responseMimeType).toBe("application/json");
@@ -346,5 +354,54 @@ describe("recipe id invariant", () => {
     const resolved = await materialize([written]);
     expect(resolved.get("gen-readback")?.times_cooked).toBe(7);
     vi.restoreAllMocks();
+  });
+});
+
+
+describe("thinking budget", () => {
+  it("asks for no thinking, so the token budget buys the answer", async () => {
+    process.env.GEMINI_API_KEY = "k";
+    const sent = captureRequests(geminiOk(CONCEPTS));
+    await generateContent({ model: "gemini-3.6-flash", system: "s", prompt: "p" });
+
+    const config = sent[0].body.generationConfig as Record<string, unknown>;
+    expect(config.thinkingConfig).toEqual({ thinkingBudget: 0 });
+  });
+
+  it("can be re-enabled deliberately", async () => {
+    process.env.GEMINI_API_KEY = "k";
+    process.env.GEMINI_THINKING = "on";
+    const sent = captureRequests(geminiOk(CONCEPTS));
+    await generateContent({ model: "gemini-3.6-flash", system: "s", prompt: "p" });
+
+    expect(sent[0].body.generationConfig).not.toHaveProperty("thinkingConfig");
+    delete process.env.GEMINI_THINKING;
+  });
+
+  it("drops the field and recovers when the model rejects it", async () => {
+    process.env.GEMINI_API_KEY = "k";
+    const sent: Record<string, unknown>[] = [];
+    let call = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: unknown, init?: RequestInit) => {
+        sent.push(JSON.parse(String(init?.body ?? "{}")));
+        call += 1;
+        if (call === 1) {
+          return new Response(
+            JSON.stringify({ error: { message: "Unknown name \"thinkingConfig\"" } }),
+            { status: 400, headers: { "content-type": "application/json" } },
+          );
+        }
+        return geminiOk(CONCEPTS)();
+      }),
+    );
+
+    const result = await generateContent({ model: "gemini-3.6-flash", system: "s", prompt: "p" });
+
+    expect(result.attempts).toBe(2);
+    // First attempt carried it, the retry did not — one failure, then working.
+    expect(sent[0].generationConfig).toHaveProperty("thinkingConfig");
+    expect(sent[1].generationConfig).not.toHaveProperty("thinkingConfig");
   });
 });
