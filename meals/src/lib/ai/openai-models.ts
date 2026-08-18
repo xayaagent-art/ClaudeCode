@@ -23,18 +23,24 @@ const ENV_KEYS: Record<OpenAITask, string> = {
   meal_generation: "OPENAI_MEAL_MODEL",
 };
 
-export type OpenAIReasoning = "minimal" | "low" | "medium" | "high";
+export type OpenAIReasoning = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
 /**
  * How much reasoning each task is worth paying for.
  *
  * Transcribing a receipt has nothing to reason about, so `minimal` is what it
- * wants — but production said otherwise: the resolved vision model rejects that
- * value outright with a 400, while `low` is accepted and, on a prompt with
- * nothing to think about, bills zero reasoning tokens anyway. So `low` costs
- * nothing here and works, and the theoretically-cheaper setting is the one that
- * breaks the request. Not every reasoning model supports every level, and which
- * ones a given id accepts is not knowable from documentation older than the id.
+ * wants — and production answered that verbatim:
+ *
+ *   400 Unsupported value: 'minimal' is not supported with the 'gpt-5.6-luna'
+ *   model. Supported values are: 'none', 'low', 'medium', 'high', 'xhigh', 'max'.
+ *
+ * `low` is the nearest supported value to "a little deliberation", which is
+ * genuinely worth having on a skewed photo where the price column has to be
+ * told from the quantity column, and it billed zero reasoning tokens on a
+ * prompt with nothing to think about. `none` is reachable through the env
+ * override for anyone who wants the floor. Which levels a given id accepts is
+ * not knowable from documentation older than the id, so this is a setting
+ * rather than a constant.
  */
 const REASONING: Record<OpenAITask, OpenAIReasoning> = {
   receipt_vision: "low",
@@ -46,11 +52,13 @@ const REASONING_ENV: Record<OpenAITask, string> = {
   meal_generation: "OPENAI_MEAL_REASONING",
 };
 
+const REASONING_VALUES = new Set<string>([
+  "none", "minimal", "low", "medium", "high", "xhigh",
+]);
+
 export function reasoningFor(task: OpenAITask): OpenAIReasoning {
   const override = process.env[REASONING_ENV[task]]?.trim().toLowerCase();
-  if (override === "minimal" || override === "low" || override === "medium" || override === "high") {
-    return override;
-  }
+  if (override && REASONING_VALUES.has(override)) return override as OpenAIReasoning;
   return REASONING[task];
 }
 

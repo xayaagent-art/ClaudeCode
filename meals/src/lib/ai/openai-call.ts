@@ -79,7 +79,12 @@ export function resetOpenAIClient(): void {
   reasoningRejected = false;
 }
 
-export type ReasoningEffort = "minimal" | "low" | "medium" | "high";
+/**
+ * The values the Responses API accepts. Not every model accepts every one —
+ * gpt-5.6-luna rejects `minimal`, for instance — so which to use per task is
+ * decided in openai-models.ts rather than here.
+ */
+export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
 export interface OpenAIStructuredRequest {
   model: string;
