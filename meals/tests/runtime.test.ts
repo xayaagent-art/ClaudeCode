@@ -294,3 +294,57 @@ describe("gemini mode can never show the demo fixture", () => {
     expect(outcome.warnings[0]).toMatch(/Mock mode/);
   });
 });
+
+describe("recipe id invariant", () => {
+  it("drops a recipe that was written but cannot be read back", async () => {
+    const { materialize } = await import("@/lib/meals/registry");
+    const { catalogRecipes } = await import("@/lib/meals/catalog");
+
+    const ghost = {
+      ...catalogRecipes[0],
+      id: "gen-ghost",
+      title: "Ghost Dish",
+      cuisine: "Nowhere",
+      source_type: "generated" as const,
+      canonical_key: null,
+    };
+
+    // upsert succeeds, the read-back finds nothing — exactly the shape of an
+    // RLS refusal or a partial write. It must not be offered to the client.
+    const upsert = vi.spyOn(db, "upsertRecipe").mockResolvedValue(ghost);
+    const get = vi.spyOn(db, "getRecipe").mockResolvedValue(null);
+
+    const resolved = await materialize([ghost]);
+
+    expect(upsert).toHaveBeenCalled();
+    expect(get).toHaveBeenCalledWith("gen-ghost");
+    expect(resolved.has("gen-ghost")).toBe(false);
+
+    upsert.mockRestore();
+    get.mockRestore();
+  });
+
+  it("returns the row as read back, not the row as written", async () => {
+    const { materialize } = await import("@/lib/meals/registry");
+    const { catalogRecipes } = await import("@/lib/meals/catalog");
+
+    const written = {
+      ...catalogRecipes[0],
+      id: "gen-readback",
+      title: "Read Back",
+      cuisine: "Testland",
+      source_type: "generated" as const,
+      canonical_key: null,
+      times_cooked: 0,
+    };
+    // The stored copy is authoritative — here it already has a cook history.
+    const stored = { ...written, times_cooked: 7 };
+
+    vi.spyOn(db, "upsertRecipe").mockResolvedValue(written);
+    vi.spyOn(db, "getRecipe").mockResolvedValue(stored);
+
+    const resolved = await materialize([written]);
+    expect(resolved.get("gen-readback")?.times_cooked).toBe(7);
+    vi.restoreAllMocks();
+  });
+});

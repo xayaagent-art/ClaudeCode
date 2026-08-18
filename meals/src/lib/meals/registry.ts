@@ -48,8 +48,10 @@ export async function materialize(recipes: Recipe[]): Promise<Map<string, Recipe
 
     // The built-in catalog is already addressable; it needs no write.
     if (existing && existing.source_type === "catalog") {
-      // Already addressable, and the catalog entry is the better record.
-      resolved.set(recipe.id, existing);
+      // Already addressable, and the catalog entry is the better record — but
+      // still confirmed through the same lookup rather than assumed.
+      const readBack = await db.getRecipe(existing.id);
+      if (readBack) resolved.set(recipe.id, readBack);
       continue;
     }
 
@@ -59,13 +61,31 @@ export async function materialize(recipes: Recipe[]): Promise<Map<string, Recipe
 
     try {
       await db.upsertRecipe(durable);
-      resolved.set(recipe.id, durable);
-    } catch {
+
+      // The invariant: a write returning without throwing is not proof the row
+      // is readable. RLS, a partial write, or a column mismatch can all leave
+      // upsert looking successful while the detail page finds nothing. The only
+      // evidence that counts is reading it back through the same lookup
+      // /recipes/[id] uses. Anything that fails this is never linked to.
+      const readBack = await db.getRecipe(durable.id);
+      if (!readBack) {
+        // eslint-disable-next-line no-console
+        console.error(
+          "[registry] wrote but could not read back",
+          JSON.stringify({ id: durable.id, key }),
+        );
+        continue;
+      }
+      resolved.set(recipe.id, readBack);
+    } catch (error) {
       // A failed write must not blank the recommendation — but the caller has
       // to know this one is not addressable, so it is dropped from the set
       // rather than shown as a link that would 404.
       // eslint-disable-next-line no-console
-      console.error("[registry] could not persist recipe", key);
+      console.error(
+        "[registry] could not persist recipe",
+        JSON.stringify({ key, error: (error as Error).message }),
+      );
     }
   }
 
