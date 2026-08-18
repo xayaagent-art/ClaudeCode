@@ -10,7 +10,9 @@ import {
   openAIModelFor,
   reasoningFor,
 } from "@/lib/ai/openai-models";
-import { candidateGenerationEnabled } from "@/lib/meals/candidates";
+import { candidateGenerationEnabled, generateMealCandidates } from "@/lib/meals/candidates";
+import { buildHouseholdContext } from "@/lib/household/context";
+import { rankRecipes } from "@/lib/meals/rank";
 import { youtubeProvider } from "@/lib/video/youtube";
 
 /**
@@ -113,6 +115,48 @@ async function probeSupabaseRest(): Promise<Record<string, unknown>> {
   }
 }
 
+/**
+ * The real generation request, end to end, against the real household.
+ *
+ * A trivial probe proves the key and the model; it does not prove the actual
+ * fourteen-candidate schema is one this model will accept under strict
+ * Structured Outputs, which is the thing that decides whether a household ever
+ * sees a suggestion. This runs the production path verbatim and reports what
+ * came back.
+ *
+ * It writes nothing. Generation produces candidates in memory — persistence
+ * happens later, in `materialize`, which this never calls — so the household's
+ * data is untouched, and the only cost is one request.
+ */
+async function probeGeneration(): Promise<Record<string, unknown>> {
+  const askedAt = Date.now();
+  try {
+    const { context, inventory } = await buildHouseholdContext("dinner");
+    const generated = await generateMealCandidates(context);
+    // Ranking is pure, so it is free to run and answers the question the count
+    // alone does not: would any of these actually survive to the screen?
+    const eligible = rankRecipes(generated.recipes, inventory, context);
+
+    return {
+      checked: true,
+      outcome: generated.outcome,
+      model: generated.model,
+      ms: Date.now() - askedAt,
+      candidates: generated.recipes.length,
+      eligible_after_ranking: eligible.length,
+      titles: generated.recipes.slice(0, 16).map((recipe) => recipe.title),
+      input_tokens: generated.usage?.input_tokens ?? null,
+      output_tokens: generated.usage?.output_tokens ?? null,
+      estimated_cost_usd: generated.usage?.estimated_cost_usd ?? null,
+      failure_kind: generated.failureKind,
+      error: generated.error,
+      persisted: false,
+    };
+  } catch (error) {
+    return { checked: true, ok: false, ms: Date.now() - askedAt, error: (error as Error).message };
+  }
+}
+
 export interface HealthReport {
   config: Record<string, unknown>;
   supabase_key: Record<string, unknown>;
@@ -120,6 +164,7 @@ export interface HealthReport {
   supabase_rest: Record<string, unknown>;
   gemini: Record<string, unknown>;
   openai: Record<string, unknown>;
+  generation: Record<string, unknown>;
   ms: number;
 }
 
@@ -146,8 +191,10 @@ async function probeOpenAI(live: boolean): Promise<Record<string, unknown>> {
     checked: true,
     key_present: true,
     models_visible: catalogue.length,
-    // The GPT-family ids only: the full list is long and mostly irrelevant here.
-    gpt_models: catalogue.filter((id) => id.startsWith("gpt-")).slice(0, 40),
+    // GPT-5 and newer only. Listing the first forty ids alphabetically hid the
+    // very models the resolver had picked, which made the report look like it
+    // had invented them.
+    gpt_models: catalogue.filter((id) => /^gpt-[5-9]/.test(id)),
     discovery_error: modelDiscoveryError(),
     resolved: { receipt_vision: receiptModel, meal_generation: mealModel },
   };
@@ -315,6 +362,8 @@ export async function healthReport(live: boolean): Promise<HealthReport> {
     database,
     gemini,
     openai,
+    generation:
+      live && candidateGenerationEnabled() ? await probeGeneration() : { checked: false },
     ms: Date.now() - startedAt,
   };
 }
