@@ -23,6 +23,37 @@ const ENV_KEYS: Record<OpenAITask, string> = {
   meal_generation: "OPENAI_MEAL_MODEL",
 };
 
+export type OpenAIReasoning = "minimal" | "low" | "medium" | "high";
+
+/**
+ * How much reasoning each task is worth paying for.
+ *
+ * Transcribing a receipt has nothing to reason about, so `minimal` is what it
+ * wants — but production said otherwise: the resolved vision model rejects that
+ * value outright with a 400, while `low` is accepted and, on a prompt with
+ * nothing to think about, bills zero reasoning tokens anyway. So `low` costs
+ * nothing here and works, and the theoretically-cheaper setting is the one that
+ * breaks the request. Not every reasoning model supports every level, and which
+ * ones a given id accepts is not knowable from documentation older than the id.
+ */
+const REASONING: Record<OpenAITask, OpenAIReasoning> = {
+  receipt_vision: "low",
+  meal_generation: "low",
+};
+
+const REASONING_ENV: Record<OpenAITask, string> = {
+  receipt_vision: "OPENAI_RECEIPT_REASONING",
+  meal_generation: "OPENAI_MEAL_REASONING",
+};
+
+export function reasoningFor(task: OpenAITask): OpenAIReasoning {
+  const override = process.env[REASONING_ENV[task]]?.trim().toLowerCase();
+  if (override === "minimal" || override === "low" || override === "medium" || override === "high") {
+    return override;
+  }
+  return REASONING[task];
+}
+
 /**
  * Preference patterns, most specific first.
  *

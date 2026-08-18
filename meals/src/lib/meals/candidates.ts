@@ -4,7 +4,7 @@ import { generateContent, geminiConfigured, toGeminiSchema } from "@/lib/ai/gemi
 import { AIFailure, classifyProviderError, type AIFailureKind } from "@/lib/ai/failure";
 import { modelFor, thinkingLevelFor } from "@/lib/ai/models";
 import { openAIConfigured, structuredCall } from "@/lib/ai/openai-call";
-import { openAIModelFor } from "@/lib/ai/openai-models";
+import { openAIModelFor, reasoningFor } from "@/lib/ai/openai-models";
 import { activeProviderName } from "@/lib/ai/provider";
 import { canonicalName } from "@/lib/kitchen/match";
 import { canonicalRecipeKey } from "@/lib/meals/memory";
@@ -262,7 +262,7 @@ async function generateWithOpenAI(prompt: string): Promise<RawGeneration> {
     maxOutputTokens: 8000,
     // Proposing a varied set that respects constraints benefits from a little
     // planning. More than "low" buys rumination, not better dinners.
-    reasoning: "low",
+    reasoning: reasoningFor("meal_generation"),
   });
   return { text: result.text, model: result.model, usage: result.usage, attempts: result.attempts };
 }

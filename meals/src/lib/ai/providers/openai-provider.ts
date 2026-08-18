@@ -4,6 +4,7 @@ import { structuredCall, resetOpenAIClient as resetClient } from "@/lib/ai/opena
 import {
   openAIModelFor,
   openAIModelHint,
+  reasoningFor,
   resetOpenAIModelCatalogue,
 } from "@/lib/ai/openai-models";
 import {
@@ -78,9 +79,11 @@ export class OpenAIProvider implements AIProvider {
       schemaName: "parsed_receipt",
       schema: receiptJsonSchema as unknown as Record<string, unknown>,
       maxOutputTokens: 8000,
-      // Reading a receipt is transcription. There is nothing to reason about,
-      // and every token spent thinking is a token not spent on a line item.
-      reasoning: "minimal",
+      // Reading a receipt is transcription — there is nothing to reason about,
+      // and every token spent thinking is a token not spent on a line item. The
+      // level lives in openai-models.ts because which values a discovered model
+      // actually accepts is a production fact, not a design choice.
+      reasoning: reasoningFor("receipt_vision"),
     });
 
     let raw: unknown;

@@ -17,8 +17,10 @@ process.env.LOCAL_DB_PATH = join(scratch, "db.json");
 delete process.env.SUPABASE_URL;
 delete process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-const { chooseModel, openAIModelFor, openAIModelHint, resetOpenAIModelCatalogue, listOpenAIModels } =
-  await import("@/lib/ai/openai-models");
+const {
+  chooseModel, openAIModelFor, openAIModelHint, reasoningFor,
+  resetOpenAIModelCatalogue, listOpenAIModels,
+} = await import("@/lib/ai/openai-models");
 const { resetOpenAIClient } = await import("@/lib/ai/providers/openai-provider");
 const { generateMealCandidates, candidateGenerationEnabled } = await import(
   "@/lib/meals/candidates"
@@ -226,6 +228,19 @@ describe("model ids are discovered, never guessed", () => {
     await openAIModelFor("receipt_vision");
 
     expect(seen.filter((call) => call.url.includes("/models"))).toHaveLength(1);
+  });
+
+  it("keeps the reasoning level off minimal, which these models reject", () => {
+    // Production evidence, not preference: the resolved vision model answers a
+    // 400 to reasoning=minimal and succeeds at low, billing zero reasoning
+    // tokens either way. Encoded as a test so a later "optimisation" back to
+    // minimal fails here rather than on someone's receipt.
+    expect(reasoningFor("receipt_vision")).toBe("low");
+    expect(reasoningFor("meal_generation")).toBe("low");
+
+    process.env.OPENAI_RECEIPT_REASONING = "medium";
+    expect(reasoningFor("receipt_vision")).toBe("medium");
+    delete process.env.OPENAI_RECEIPT_REASONING;
   });
 
   it("degrades to a known id when discovery itself fails", async () => {

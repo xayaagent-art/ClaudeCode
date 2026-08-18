@@ -3,8 +3,13 @@ import { getDb, persistenceKind } from "@/lib/db";
 import { activeProviderName } from "@/lib/ai";
 import { modelRouting } from "@/lib/ai/models";
 import { generateContent, geminiConfigured } from "@/lib/ai/gemini";
-import { openAIConfigured, structuredCall } from "@/lib/ai/openai-call";
-import { listOpenAIModels, modelDiscoveryError, openAIModelFor } from "@/lib/ai/openai-models";
+import { openAIConfigured, structuredCall, type ReasoningEffort } from "@/lib/ai/openai-call";
+import {
+  listOpenAIModels,
+  modelDiscoveryError,
+  openAIModelFor,
+  reasoningFor,
+} from "@/lib/ai/openai-models";
 import { candidateGenerationEnabled } from "@/lib/meals/candidates";
 import { youtubeProvider } from "@/lib/video/youtube";
 
@@ -153,10 +158,17 @@ async function probeOpenAI(live: boolean): Promise<Record<string, unknown>> {
   // parameter does this one accept" is not answerable from documentation this
   // build was written against. Each variant changes exactly one thing, so the
   // first one that succeeds names the cause.
+  report.reasoning = {
+    receipt_vision: reasoningFor("receipt_vision"),
+    meal_generation: reasoningFor("meal_generation"),
+  };
   report.live = [
-    await probeOnce("resolved model, reasoning=low", mealModel, "low"),
-    await probeOnce("resolved model, no reasoning", mealModel, undefined),
-    await probeOnce("gpt-5 baseline", "gpt-5", "low"),
+    await probeOnce("meal model, configured reasoning", mealModel, reasoningFor("meal_generation")),
+    await probeOnce("vision model, configured reasoning", receiptModel, reasoningFor("receipt_vision")),
+    // Kept deliberately: "minimal" is the level a transcription task wants and
+    // the one this account's models reject. If that ever changes, this line is
+    // where it shows up, rather than in a receipt failing for a user.
+    await probeOnce("vision model, reasoning=minimal", receiptModel, "minimal"),
   ];
   return report;
 }
@@ -170,7 +182,7 @@ async function probeOpenAI(live: boolean): Promise<Record<string, unknown>> {
 async function probeOnce(
   label: string,
   model: string,
-  reasoning: "minimal" | "low" | undefined,
+  reasoning: ReasoningEffort | undefined,
 ): Promise<Record<string, unknown>> {
   const askedAt = Date.now();
   try {
