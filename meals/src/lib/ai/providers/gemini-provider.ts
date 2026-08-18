@@ -1,7 +1,7 @@
 import "server-only";
 import { AIFailure } from "@/lib/ai/failure";
 import { generateContent, toGeminiSchema } from "@/lib/ai/gemini";
-import { modelFor, shouldEscalateReceipt } from "@/lib/ai/models";
+import { modelFor, shouldEscalateReceipt, thinkingLevelFor } from "@/lib/ai/models";
 import {
   AIConfigurationError,
   type AIProvider,
@@ -132,7 +132,11 @@ export class GeminiProvider implements AIProvider {
       image: { base64: image.base64, mimeType: image.mimeType },
       responseSchema: toGeminiSchema(receiptJsonSchema),
       maxOutputTokens: 8000,
-      temperature: 0,
+      // Reading a receipt is transcription. There is nothing to reason about,
+      // and every token spent thinking is a token not spent on a line item.
+      thinkingLevel: thinkingLevelFor(
+        model === modelFor("receipt_parse") ? "receipt_parse" : "receipt_escalation",
+      ),
     });
 
     let raw: unknown;

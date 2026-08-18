@@ -110,7 +110,7 @@ describe("gemini request payload", () => {
       system: "system framing",
       prompt: "user prompt",
       maxOutputTokens: 4000,
-      temperature: 0.9,
+      thinkingLevel: "low",
     });
 
     expect(sent).toHaveLength(1);
@@ -126,9 +126,12 @@ describe("gemini request payload", () => {
       "responseMimeType",
       "thinkingConfig",
     ]);
-    // Production evidence: without this the entire output budget goes on
-    // internal reasoning and the reply comes back empty with MAX_TOKENS.
-    expect(config.thinkingConfig).toEqual({ thinkingBudget: 0 });
+    // Production evidence: without capping this the entire output budget goes
+    // on internal reasoning and the reply comes back empty with MAX_TOKENS.
+    expect(config.thinkingConfig).toEqual({ thinkingLevel: "low" });
+    // Deprecated sampling params are gone entirely.
+    expect(config).not.toHaveProperty("topP");
+    expect(config).not.toHaveProperty("topK");
     // temperature is NOT sent by default, even though the caller asked for one.
     expect(config).not.toHaveProperty("temperature");
     expect(config.responseMimeType).toBe("application/json");
@@ -143,13 +146,13 @@ describe("gemini request payload", () => {
     expect(sent[0].body).not.toHaveProperty("system_instruction");
   });
 
-  it("sends temperature only when explicitly configured", async () => {
+  it("never sends sampling parameters", async () => {
     process.env.GEMINI_API_KEY = "test-key-not-real";
-    process.env.GEMINI_TEMPERATURE = "0.4";
     const sent = captureRequests(geminiOk(CONCEPTS));
     await generateContent({ model: "gemini-3.6-flash", system: "s", prompt: "p" });
 
-    expect((sent[0].body.generationConfig as Record<string, unknown>).temperature).toBe(0.4);
+    const config = sent[0].body.generationConfig as Record<string, unknown>;
+    expect(config).not.toHaveProperty("temperature");
   });
 
   it("keeps the key in a header, never in the URL", async () => {
@@ -359,23 +362,22 @@ describe("recipe id invariant", () => {
 
 
 describe("thinking budget", () => {
-  it("asks for no thinking, so the token budget buys the answer", async () => {
+  it("caps reasoning per task: minimal to read, low to propose", async () => {
+    const { thinkingLevelFor } = await import("@/lib/ai/models");
+    expect(thinkingLevelFor("receipt_parse")).toBe("minimal");
+    expect(thinkingLevelFor("meal_candidate_generation")).toBe("low");
+
     process.env.GEMINI_API_KEY = "k";
     const sent = captureRequests(geminiOk(CONCEPTS));
-    await generateContent({ model: "gemini-3.6-flash", system: "s", prompt: "p" });
-
-    const config = sent[0].body.generationConfig as Record<string, unknown>;
-    expect(config.thinkingConfig).toEqual({ thinkingBudget: 0 });
-  });
-
-  it("can be re-enabled deliberately", async () => {
-    process.env.GEMINI_API_KEY = "k";
-    process.env.GEMINI_THINKING = "on";
-    const sent = captureRequests(geminiOk(CONCEPTS));
-    await generateContent({ model: "gemini-3.6-flash", system: "s", prompt: "p" });
-
-    expect(sent[0].body.generationConfig).not.toHaveProperty("thinkingConfig");
-    delete process.env.GEMINI_THINKING;
+    await generateContent({
+      model: "gemini-3.5-flash-lite",
+      system: "s",
+      prompt: "p",
+      thinkingLevel: "minimal",
+    });
+    expect((sent[0].body.generationConfig as Record<string, unknown>).thinkingConfig).toEqual({
+      thinkingLevel: "minimal",
+    });
   });
 
   it("drops the field and recovers when the model rejects it", async () => {

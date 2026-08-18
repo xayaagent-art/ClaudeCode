@@ -2,7 +2,7 @@ import "server-only";
 import { z } from "zod";
 import { generateContent } from "@/lib/ai/gemini";
 import { AIFailure, classifyProviderError, type AIFailureKind } from "@/lib/ai/failure";
-import { modelFor } from "@/lib/ai/models";
+import { modelFor, thinkingLevelFor } from "@/lib/ai/models";
 import { geminiConfigured } from "@/lib/ai/gemini";
 import { canonicalName } from "@/lib/kitchen/match";
 import { canonicalRecipeKey } from "@/lib/meals/memory";
@@ -157,9 +157,12 @@ export async function generateMealCandidates(
       system: SYSTEM,
       prompt,
       responseSchema: responseSchema as unknown as Record<string, unknown>,
-      maxOutputTokens: 12000,
-      // Ideas are the one place variety is the point; transcription is not.
-      temperature: 0.9,
+      // Sized from the schema: each candidate is nine fields, roughly 120-160
+      // output tokens once the ingredient list and the two prose fields are
+      // counted. Twelve of those is ~2k, so 8k leaves room for a long set plus
+      // the reasoning allowance without inviting a truncated reply.
+      maxOutputTokens: 8000,
+      thinkingLevel: thinkingLevelFor("meal_candidate_generation"),
     });
 
     const parsed = resultSchema.safeParse(JSON.parse(response.text));

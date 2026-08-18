@@ -2,6 +2,7 @@ import "server-only";
 import { AIFailure } from "@/lib/ai/failure";
 import { estimateCostUsd } from "@/lib/ai/pricing";
 import { withRetry } from "@/lib/ai/retry";
+import type { ThinkingLevel } from "@/lib/ai/models";
 import type { AIUsage } from "@/lib/ai/provider";
 
 /**
@@ -84,22 +85,21 @@ let thinkingConfigRejected = false;
  * receipt and for filling a fixed JSON schema there is nothing to reason about,
  * so the budget is spent on the answer instead.
  */
-function generationConfig(request: GeminiRequest): Record<string, unknown> {
+function generationConfig(request: GeminiRequest, maxOutputTokens: number): Record<string, unknown> {
   const config: Record<string, unknown> = {
-    maxOutputTokens: request.maxOutputTokens ?? 8000,
+    maxOutputTokens,
     responseMimeType: "application/json",
   };
   if (request.responseSchema) config.responseSchema = request.responseSchema;
 
-  if (!thinkingConfigRejected && process.env.GEMINI_THINKING !== "on") {
-    config.thinkingConfig = { thinkingBudget: 0 };
+  // Sampling parameters are deliberately absent. Structured output constrained
+  // by a schema does not need them, and an unsupported or deprecated knob is
+  // rejected for the whole request — a failure indistinguishable, from the
+  // outside, from a model that had nothing to say.
+  if (!thinkingConfigRejected) {
+    config.thinkingConfig = { thinkingLevel: request.thinkingLevel ?? "low" };
   }
 
-  const configured = Number(process.env.GEMINI_TEMPERATURE);
-  if (Number.isFinite(configured)) config.temperature = configured;
-  else if (request.temperature !== undefined && process.env.GEMINI_SEND_TEMPERATURE === "true") {
-    config.temperature = request.temperature;
-  }
   return config;
 }
 
@@ -122,8 +122,8 @@ export interface GeminiRequest {
   /** OpenAPI-subset schema. Gemini constrains output to it. */
   responseSchema?: Record<string, unknown>;
   maxOutputTokens?: number;
-  /** 0 for transcription, higher where variety is the point. */
-  temperature?: number;
+  /** How much reasoning to pay for before the answer. */
+  thinkingLevel?: ThinkingLevel;
 }
 
 export interface GeminiResult {
@@ -170,6 +170,16 @@ function failureForStatus(status: number, retryAfter: string | null): AIFailure 
   return new AIFailure("api_error", `gemini returned ${status}`);
 }
 
+/** Cheap completeness check — a cut-off reply is valid text but invalid JSON. */
+function isCompleteJson(text: string): boolean {
+  try {
+    JSON.parse(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** One generateContent call, with the shared timeout and retry policy. */
 export async function generateContent(request: GeminiRequest): Promise<GeminiResult> {
   const key = apiKey();
@@ -181,12 +191,18 @@ export async function generateContent(request: GeminiRequest): Promise<GeminiRes
     });
   }
 
+  const baseTokens = request.maxOutputTokens ?? 8000;
+  // Raised for the retry when a reply is cut off mid-JSON. Capped, because a
+  // model that cannot finish at double the allowance will not finish at ten
+  // times it either — that is a prompt problem, not a budget problem.
+  let allowance = baseTokens;
+
   const buildBody = (): Record<string, unknown> => ({
     contents: [{ role: "user", parts }],
     // Canonical JSON name for the field. Proto3 JSON accepts either spelling,
     // but the documented one is what the API reference and every example use.
     systemInstruction: { parts: [{ text: request.system }] },
-    generationConfig: generationConfig(request),
+    generationConfig: generationConfig(request, allowance),
   });
 
   const startedAt = Date.now();
@@ -243,8 +259,40 @@ export async function generateContent(request: GeminiRequest): Promise<GeminiRes
       );
       throw failure;
     }
-    return (await response.json()) as GeminiResponseBody;
-  }, { attempts: 2, baseDelayMs: 500 });
+    const body = (await response.json()) as GeminiResponseBody;
+
+    // Truncation is a budget failure, not a provider failure, and it is worth
+    // exactly one more attempt with more room. Retrying at the same allowance
+    // would deterministically truncate at the same point.
+    const candidate = body.candidates?.[0];
+    const cutOff = candidate?.finishReason === "MAX_TOKENS";
+    const text = (candidate?.content?.parts ?? []).map((part) => part.text ?? "").join("");
+    const unparseable = text.length > 0 && !isCompleteJson(text);
+
+    if ((cutOff || unparseable) && allowance < baseTokens * 2) {
+      const previous = allowance;
+      allowance = Math.min(baseTokens * 2, 32_000);
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[gemini] reply truncated, retrying with more room",
+        JSON.stringify({ model: request.model, from: previous, to: allowance, chars: text.length }),
+      );
+      throw new AIFailure("api_error", `gemini truncated at ${previous} tokens, retrying`);
+    }
+
+    return body;
+  }, {
+    attempts: 3,
+    baseDelayMs: 500,
+    // Backoff must respect the budget too. Sleeping past it turns a bounded
+    // call into an unbounded one by the back door — the attempts are capped
+    // but the waiting between them is not.
+    sleep: async (ms) => {
+      const remaining = budget - (Date.now() - startedAt);
+      if (remaining <= 0) return;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(ms, remaining)));
+    },
+  });
 
   const candidate = value.candidates?.[0];
 

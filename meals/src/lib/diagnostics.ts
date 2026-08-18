@@ -15,8 +15,66 @@ import { youtubeProvider } from "@/lib/video/youtube";
  * recipe lookup, so the production code path can be verified rather than
  * assumed. It mutates nothing.
  */
+/**
+ * What the configured Supabase credential actually claims.
+ *
+ * Production returned "JWT issued in the future", which has exactly three
+ * causes: a token minted with a forward-dated `iat`, a clock difference between
+ * the issuer and the gateway, or the wrong token entirely. Only the token can
+ * say which. These are public claims from the payload segment — role, project
+ * ref and timestamps — never the signature and never the key itself, so this is
+ * safe to read while remaining decisive.
+ */
+function inspectSupabaseKey(): Record<string, unknown> {
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!key) return { present: false };
+
+  const trimmed = key.trim();
+  const whitespaceDamaged = trimmed !== key;
+  const parts = trimmed.split(".");
+
+  if (parts.length !== 3) {
+    // Newer projects issue `sb_secret_...` keys, which are not JWTs at all and
+    // could never produce this error — worth knowing which shape is in play.
+    return {
+      present: true,
+      format: trimmed.startsWith("sb_") ? "sb_secret" : "unrecognised",
+      length: trimmed.length,
+      whitespace_damaged: whitespaceDamaged,
+    };
+  }
+
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as {
+      iat?: number;
+      exp?: number;
+      role?: string;
+      ref?: string;
+      iss?: string;
+    };
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    return {
+      present: true,
+      format: "jwt",
+      whitespace_damaged: whitespaceDamaged,
+      role: payload.role ?? null,
+      project_ref: payload.ref ?? null,
+      issuer: payload.iss ?? null,
+      issued_at: payload.iat ? new Date(payload.iat * 1000).toISOString() : null,
+      expires_at: payload.exp ? new Date(payload.exp * 1000).toISOString() : null,
+      // Positive means the token claims to have been issued in our future.
+      issued_seconds_ahead_of_now: payload.iat ? payload.iat - nowSeconds : null,
+      expired: payload.exp ? payload.exp < nowSeconds : null,
+      server_time: new Date().toISOString(),
+    };
+  } catch (error) {
+    return { present: true, format: "jwt", decode_error: (error as Error).message };
+  }
+}
+
 export interface HealthReport {
   config: Record<string, unknown>;
+  supabase_key: Record<string, unknown>;
   database: Record<string, unknown>;
   gemini: Record<string, unknown>;
   ms: number;
@@ -66,7 +124,11 @@ export async function healthReport(live: boolean): Promise<HealthReport> {
         model,
         system: "Reply with JSON only.",
         prompt: 'Return exactly {"ok":true}',
-        maxOutputTokens: 64,
+        // Not 64. These models spend part of the allowance reasoning before
+        // any text appears, so a tiny ceiling proves nothing except that the
+        // ceiling was tiny.
+        maxOutputTokens: 2000,
+        thinkingLevel: "minimal",
       });
       gemini = {
         checked: true,
@@ -91,5 +153,5 @@ export async function healthReport(live: boolean): Promise<HealthReport> {
     }
   }
 
-  return { config, database, gemini, ms: Date.now() - startedAt };
+  return { config, supabase_key: inspectSupabaseKey(), database, gemini, ms: Date.now() - startedAt };
 }

@@ -29,6 +29,38 @@ const ENV_KEYS: Record<AITask, string> = {
   meal_candidate_generation: "GEMINI_MEAL_MODEL",
 };
 
+/**
+ * How much internal reasoning each task is worth paying for.
+ *
+ * Gemini 3.x models think before they answer, and that thinking is drawn from
+ * the same output allowance as the reply. Production proved the cost: a trivial
+ * prompt came back with no text at all, MAX_TOKENS, and 14.8s. Transcribing a
+ * receipt is pure reading, so it gets the minimum; proposing meals benefits
+ * from a little planning, so it gets low — never more, because the budget is
+ * better spent on the answer.
+ */
+export type ThinkingLevel = "minimal" | "low" | "medium" | "high";
+
+const THINKING: Record<AITask, ThinkingLevel> = {
+  receipt_parse: "minimal",
+  receipt_escalation: "low",
+  meal_candidate_generation: "low",
+};
+
+const THINKING_ENV: Record<AITask, string> = {
+  receipt_parse: "GEMINI_RECEIPT_THINKING",
+  receipt_escalation: "GEMINI_RECEIPT_ESCALATION_THINKING",
+  meal_candidate_generation: "GEMINI_MEAL_THINKING",
+};
+
+export function thinkingLevelFor(task: AITask): ThinkingLevel {
+  const override = process.env[THINKING_ENV[task]]?.trim().toLowerCase();
+  if (override === "minimal" || override === "low" || override === "medium" || override === "high") {
+    return override;
+  }
+  return THINKING[task];
+}
+
 export function modelFor(task: AITask): string {
   const override = process.env[ENV_KEYS[task]]?.trim();
   if (override) return override;
