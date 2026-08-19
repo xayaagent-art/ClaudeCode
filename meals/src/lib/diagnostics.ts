@@ -100,18 +100,34 @@ async function probeSupabaseRest(): Promise<Record<string, unknown>> {
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
   if (!url || !key) return { checked: false };
 
+  // Both header shapes against `inventory_items` — the table the adapter was
+  // actually rejected on, not a table chosen for being easy. The pair is the
+  // whole point: `apikey` alone is what a new-format secret is documented to
+  // travel as, and adding the Bearer is what supabase-js was doing when
+  // production answered "JWT issued at future".
+  return {
+    checked: true,
+    apikey_only: await probeRestOnce(url, { apikey: key }),
+    apikey_and_bearer: await probeRestOnce(url, { apikey: key, authorization: `Bearer ${key}` }),
+  };
+}
+
+async function probeRestOnce(
+  url: string,
+  headers: Record<string, string>,
+): Promise<Record<string, unknown>> {
   const askedAt = Date.now();
   try {
-    const response = await fetch(`${url}/rest/v1/households?select=id&limit=1`, {
-      headers: { apikey: key, authorization: `Bearer ${key}` },
+    const response = await fetch(`${url}/rest/v1/inventory_items?select=id&limit=1`, {
+      headers,
       signal: AbortSignal.timeout(8_000),
     });
     // The body is either an id we already know or PostgREST's own error text.
     // Neither is sensitive, and without it there is nothing to diagnose from.
     const body = (await response.text()).slice(0, 300);
-    return { checked: true, status: response.status, ms: Date.now() - askedAt, body };
+    return { status: response.status, ms: Date.now() - askedAt, body };
   } catch (error) {
-    return { checked: true, ok: false, ms: Date.now() - askedAt, error: (error as Error).message };
+    return { ok: false, ms: Date.now() - askedAt, error: (error as Error).message };
   }
 }
 

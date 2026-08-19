@@ -34,12 +34,49 @@ export function supabaseConfigured(): boolean {
 
 let client: SupabaseClient | null = null;
 
+/**
+ * New-format Supabase keys (`sb_secret_…`, `sb_publishable_…`) are not JWTs.
+ *
+ * supabase-js says so itself, in lib/fetch.ts: they "must never be sent as a
+ * Bearer token — they belong only in the `apikey` header". It only enforces
+ * that for Edge Functions, though; every PostgREST request still goes out with
+ * `Authorization: Bearer sb_secret_…`, which asks the gateway to read a
+ * 41-character opaque secret as a signed token. Production answered that with
+ * `JWT issued at future` on reads that the same credential satisfies when it
+ * is sent as `apikey` alone.
+ */
+function isNewFormatKey(key: string): boolean {
+  return key.startsWith("sb_secret_") || key.startsWith("sb_publishable_");
+}
+
+/**
+ * The last fetch before the wire, so it sees the headers supabase-js actually
+ * settled on and can drop the Bearer it should not have set. A legacy JWT key
+ * keeps its Authorization header, because for those the Bearer is the credential.
+ */
+export function adminFetch(key: string): typeof fetch {
+  if (!isNewFormatKey(key)) return (input, init) => fetch(input, init);
+  return (input, init) => {
+    const headers = new Headers(init?.headers);
+    headers.delete("Authorization");
+    return fetch(input, { ...init, headers });
+  };
+}
+
+/**
+ * Server-only admin client. No session is ever established, restored or
+ * refreshed: the secret is the whole credential, and any session machinery here
+ * would only invent a second identity for requests that already have one.
+ */
 export function supabaseAdmin(): SupabaseClient {
   if (!client) {
-    const url = process.env.SUPABASE_URL;
-    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const url = process.env.SUPABASE_URL?.trim();
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
     if (!url || !key) throw new Error("Supabase is not configured");
-    client = createClient(url, key, { auth: { persistSession: false } });
+    client = createClient(url, key, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+      global: { fetch: adminFetch(key) },
+    });
   }
   return client;
 }
