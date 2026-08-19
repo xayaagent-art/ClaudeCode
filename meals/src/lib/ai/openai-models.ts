@@ -1,5 +1,5 @@
 import "server-only";
-import { openaiClient } from "@/lib/ai/openai-call";
+import { openaiClient, type ReasoningEffort } from "@/lib/ai/openai-call";
 
 /**
  * Task → OpenAI model resolution.
@@ -23,7 +23,7 @@ const ENV_KEYS: Record<OpenAITask, string> = {
   meal_generation: "OPENAI_MEAL_MODEL",
 };
 
-export type OpenAIReasoning = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type OpenAIReasoning = ReasoningEffort;
 
 /**
  * How much reasoning each task is worth paying for.
@@ -52,8 +52,17 @@ const REASONING_ENV: Record<OpenAITask, string> = {
   meal_generation: "OPENAI_MEAL_REASONING",
 };
 
+/**
+ * Every level the override will honour. `max` is in here because production
+ * named it as supported and leaving it out meant `OPENAI_MEAL_REASONING=max`
+ * was silently ignored — the setting appeared to take and the model kept
+ * running at `low`, which is worse than rejecting it. `minimal` stays despite
+ * this account's models rejecting it: a level a future id accepts should not
+ * need a code change, and a 400 naming it is recovered from once by the retry
+ * in openai-call.ts rather than lost.
+ */
 const REASONING_VALUES = new Set<string>([
-  "none", "minimal", "low", "medium", "high", "xhigh",
+  "none", "minimal", "low", "medium", "high", "xhigh", "max",
 ]);
 
 export function reasoningFor(task: OpenAITask): OpenAIReasoning {

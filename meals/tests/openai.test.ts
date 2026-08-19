@@ -243,6 +243,21 @@ describe("model ids are discovered, never guessed", () => {
     delete process.env.OPENAI_RECEIPT_REASONING;
   });
 
+  it("honours every level production named, and ignores one it did not", () => {
+    // The 400 listed the supported set verbatim: none, low, medium, high,
+    // xhigh, max. An override outside it must fall back rather than be sent,
+    // and one inside it must actually take — `max` was being dropped, which
+    // looked from the outside like the setting working and doing nothing.
+    for (const level of ["none", "low", "medium", "high", "xhigh", "max"]) {
+      process.env.OPENAI_MEAL_REASONING = level;
+      expect(reasoningFor("meal_generation")).toBe(level);
+    }
+
+    process.env.OPENAI_MEAL_REASONING = "enormous";
+    expect(reasoningFor("meal_generation")).toBe("low");
+    delete process.env.OPENAI_MEAL_REASONING;
+  });
+
   it("degrades to a known id when discovery itself fails", async () => {
     openAIMode();
     stubOpenAI({ models: () => jsonResponse({ error: { message: "nope" } }, 500) });

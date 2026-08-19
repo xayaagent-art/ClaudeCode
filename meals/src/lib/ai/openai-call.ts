@@ -84,7 +84,14 @@ export function resetOpenAIClient(): void {
  * gpt-5.6-luna rejects `minimal`, for instance — so which to use per task is
  * decided in openai-models.ts rather than here.
  */
-export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ReasoningEffort =
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
 
 export interface OpenAIStructuredRequest {
   model: string;
