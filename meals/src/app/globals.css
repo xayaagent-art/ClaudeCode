@@ -26,7 +26,12 @@
   --color-good: #3f6b4e;
   --color-good-soft: #eaf0eb;
 
-  --radius-card: 18px;
+  --radius-card: 16px;
+  --radius-tile: 12px;
+  --radius-sheet: 24px;
+
+  /* One horizontal margin for the whole app. */
+  --spacing-gutter: 18px;
 
   --font-sans: var(--font-app), ui-sans-serif, system-ui, -apple-system,
     "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -44,6 +49,21 @@
   --text-body--line-height: 24px;
   --text-meta: 13px;
   --text-meta--line-height: 18px;
+
+  /*
+   * The dish name is the largest thing in the app. Nothing else competes:
+   * the date is 13px, the greeting is gone, and the page title on secondary
+   * screens sits at --text-display. Deliberately smaller than the failed
+   * attempt's 34px hero, which pushed the food itself below the fold.
+   */
+  --text-dish: 25px;
+  --text-dish--line-height: 30px;
+  --text-dish--letter-spacing: -0.022em;
+
+  /* Small-caps section opener. The only place tracking goes positive. */
+  --text-label: 11px;
+  --text-label--line-height: 14px;
+  --text-label--letter-spacing: 0.08em;
 }
 
 @layer base {
@@ -75,7 +95,59 @@
 
 @layer utilities {
   .pad-safe-bottom {
-    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 10px);
+  }
+
+  .px-gutter {
+    padding-left: var(--spacing-gutter);
+    padding-right: var(--spacing-gutter);
+  }
+
+  .mx-gutter {
+    margin-left: var(--spacing-gutter);
+    margin-right: var(--spacing-gutter);
+  }
+
+  /*
+   * Clearance for the fixed tab bar. Every scrollable screen ends with this,
+   * so nothing can come to rest underneath the navigation — the failure the
+   * last attempt shipped, where Use soon sat behind the tabs.
+   */
+  .pad-nav {
+    padding-bottom: calc(env(safe-area-inset-top, 0px) * 0 + env(safe-area-inset-bottom, 0px) + 84px);
+  }
+
+  .pad-safe-top {
+    padding-top: calc(env(safe-area-inset-top, 0px) + 6px);
+  }
+
+  .label-cap {
+    font-size: var(--text-label);
+    line-height: var(--text-label--line-height);
+    letter-spacing: var(--text-label--letter-spacing);
+    text-transform: uppercase;
+    font-weight: 650;
+    color: var(--color-ink-faint);
+  }
+
+  /* Images arrive after the card. They settle rather than pop. */
+  .img-settle {
+    animation: img-settle 240ms ease-out both;
+  }
+
+  .sheet-rise {
+    animation: sheet-rise 260ms cubic-bezier(0.32, 0.72, 0, 1) both;
+  }
+
+  .scrim-in {
+    animation: scrim-in 180ms ease-out both;
+  }
+
+  /* Content being refreshed stays readable underneath the progress note. */
+  .is-refreshing {
+    opacity: 0.5;
+    transition: opacity 180ms ease-out;
+    pointer-events: none;
   }
 
   .stage-enter {
@@ -110,6 +182,33 @@
   to {
     opacity: 1;
     transform: none;
+  }
+}
+
+@keyframes img-settle {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes sheet-rise {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: none;
+  }
+}
+
+@keyframes scrim-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
   }
 }
 
