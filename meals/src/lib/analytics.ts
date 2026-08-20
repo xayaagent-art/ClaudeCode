@@ -24,7 +24,15 @@ export type AnalyticsEvent =
   | "plan_generated"
   | "plan_day_replaced"
   | "inventory_item_added"
-  | "inventory_item_updated";
+  | "inventory_item_updated"
+  // The vocabulary meals/behavior.ts normalises on. The older names above are
+  // still accepted and still count toward the same history.
+  | "recommendation_shown"
+  | "recommendation_dismissed"
+  | "recipe_opened"
+  | "video_opened"
+  | "planned"
+  | "cooked";
 
 /**
  * Events that are also persisted as household preference signals. Analytics can
@@ -40,6 +48,12 @@ const PERSISTED: ReadonlySet<AnalyticsEvent> = new Set<AnalyticsEvent>([
   "meal_logged",
   "recommendation_regenerated",
   "meal_disliked",
+  "recommendation_shown",
+  "recommendation_dismissed",
+  "recipe_opened",
+  "video_opened",
+  "planned",
+  "cooked",
 ]);
 
 /** Signal names use the product vocabulary, which differs for one event. */
