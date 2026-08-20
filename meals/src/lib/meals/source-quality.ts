@@ -23,7 +23,9 @@ import type { VideoCandidate } from "@/lib/video/provider";
  * cannot simultaneously be meaningless filler and evidence of a vlog.
  */
 const OFF_FORMAT: RegExp[] = [
-  /\bshorts\b/,
+  // "#shorts" is a format tag, not a verdict. A 50-second demonstration of the
+  // actual dish is often the most useful thing on the platform, so length and
+  // instructional intent are judged on their own below rather than by the tag.
   /\basmr\b/,
   /\bmukbang\b/,
   /\btaste test\b/,
@@ -95,15 +97,50 @@ export function dishRelevance(recipeTitle: string, candidateTitle: string): numb
   return hits / wanted.length;
 }
 
-/** A recipe you can follow runs a few minutes; 30-second clips and 40-minute vlogs do not. */
+/**
+ * How well a runtime suits someone cooking from it.
+ *
+ * 2-10 minutes is the shape of a real cook-along and scores full marks.
+ * 10-15 is fine. Past 15 the video is a lesson, a vlog or a compilation, and
+ * is pushed down hard enough that any credible shorter alternative wins — but
+ * not to zero, because a 20-minute video is still better than no video when it
+ * is the only thing that teaches the dish.
+ *
+ * Shorts are scored on their own terms rather than excluded. Under 60 seconds
+ * cannot carry a full method, so it lands mid-table: good enough to win when
+ * it is genuinely about the dish and nothing longer is, never good enough to
+ * beat a real cook-along on shortness alone.
+ */
 export function durationFit(seconds: number | null): number {
   if (seconds === null) return 0.5;
-  if (seconds < 90) return 0.1;
-  if (seconds <= 180) return 0.7;
-  if (seconds <= 900) return 1;
-  if (seconds <= 1500) return 0.7;
-  return 0.35;
+  if (seconds < 45) return 0.25;
+  if (seconds < 120) return 0.6;
+  if (seconds <= 600) return 1;
+  if (seconds <= 900) return 0.8;
+  if (seconds <= 1200) return 0.35;
+  return 0.15;
 }
+
+/**
+ * Credibility from reach, 0-1, with a floor under what counts as evidence.
+ *
+ * A few hundred views is not a recommendation — it is an absence of one. The
+ * curve is flat and low until about 5k, climbs through the range where a
+ * cooking video has actually been watched, and flattens again past a million
+ * because beyond that bigger is just bigger.
+ */
+export function reachScore(views: number | null): number {
+  if (views === null || views <= 0) return 0.3;
+  if (views < 1_000) return 0.05;
+  if (views < 5_000) return 0.15;
+  if (views < 50_000) return 0.5;
+  if (views < 100_000) return 0.7;
+  if (views < 1_000_000) return 0.85;
+  return 1;
+}
+
+/** Below this, a video needs everything else to be excellent to be used. */
+export const LOW_VIEW_FLOOR = 5_000;
 
 export interface QualityAssessment extends SourceQuality {
   /** True when the candidate must not be used at all. */
@@ -170,8 +207,9 @@ export function assessVideo(
   // Popularity is a weak credibility proxy, capped so a viral clip cannot
   // outrank a well-matched video from a smaller channel.
   const views = candidate.view_count ?? 0;
-  const reach = views > 0 ? clamp01(Math.log10(views) / 6) : 0.3;
+  const reach = reachScore(candidate.view_count);
   if (views > 0) reasons.push(`${views.toLocaleString()} views`);
+  if (views > 0 && views < LOW_VIEW_FLOOR) reasons.push("Penalised: very few views");
 
   // Engagement relative to reach separates a video people actually watched and
   // used from one an algorithm happened to push. Log-scaled and capped, because
@@ -191,16 +229,20 @@ export function assessVideo(
   const hasThumb = Boolean(candidate.thumbnail_url);
   if (!hasThumb) reasons.push("No thumbnail available");
 
+  // Order of the weights is the priority order in the spec: relevance first,
+  // then instructional intent, then duration, then who made it, then reach.
+  // Popularity is last on purpose — it must never buy a place ahead of a video
+  // that is actually about the dish.
   const score = clamp01(
-    0.34 * relevance +
+    0.30 * relevance +
+      (teaches ? 0.14 : 0) +
       0.16 * duration +
-      (teaches ? 0.12 : 0) +
-      (cuisineHit ? 0.09 : 0) +
       (culinary ? 0.09 : 0) +
       0.08 * authority +
-      0.06 * reach +
+      0.10 * reach +
       0.04 * engagement +
-      (hasThumb ? 0.06 : 0) -
+      (cuisineHit ? 0.05 : 0) +
+      (hasThumb ? 0.04 : 0) -
       (offFormat ? 0.25 : 0),
   );
 
@@ -255,7 +297,26 @@ export interface SelectedVideo {
   quality: QualityAssessment;
 }
 
-/** Pick the best candidate, or null when none clears the bar. */
+/** Videos this long are a last resort, however good they otherwise look. */
+const LONG_VIDEO_SECONDS = 900;
+
+/** A candidate we would rather not use if anything credible exists instead. */
+function isCompromised(entry: SelectedVideo): boolean {
+  const { view_count, duration_seconds } = entry.candidate;
+  const tooFewViews = view_count !== null && view_count > 0 && view_count < LOW_VIEW_FLOOR;
+  const tooLong = duration_seconds !== null && duration_seconds > LONG_VIDEO_SECONDS;
+  return tooFewViews || tooLong;
+}
+
+/**
+ * Pick the best candidate, or null when none clears the bar.
+ *
+ * Score alone would let a barely-watched clip or a 25-minute lesson win on the
+ * strength of a perfect title match. So the field is split: anything credible
+ * is preferred outright, and the compromised ones are used only when nothing
+ * credible cleared the bar — which is the difference between "prefer" and
+ * "reject", and the reason a dish with only one video still gets it.
+ */
 export function selectBestVideo(
   candidates: VideoCandidate[],
   recipe: Recipe,
@@ -265,7 +326,9 @@ export function selectBestVideo(
     .map((candidate) => ({ candidate, quality: assessVideo(candidate, recipe, context) }))
     .filter((entry) => !entry.quality.disqualified && entry.quality.score >= MIN_SOURCE_QUALITY)
     .sort((a, b) => b.quality.score - a.quality.score);
-  return assessed[0] ?? null;
+
+  const credible = assessed.filter((entry) => !isCompromised(entry));
+  return credible[0] ?? assessed[0] ?? null;
 }
 
 /** The search string used to find a cook-along for this dish. */
@@ -275,4 +338,43 @@ export function buildVideoQuery(recipe: Recipe): string {
     ? ` ${recipe.cuisine}`
     : "";
   return `${base}${cuisine} recipe`;
+}
+
+/**
+ * Several ways of asking for the same dish.
+ *
+ * One phrasing gets one slice of YouTube, and our phrasing is often not the
+ * one cooks use: "Chicken Saag" and "Indian chicken spinach curry" surface
+ * substantially different videos, and the good one is not reliably under our
+ * wording. Variants are deduplicated and ordered most-specific first, so the
+ * first search is still the most likely to answer and later ones only widen.
+ *
+ * Kept small deliberately: each variant is a 100-unit search against a
+ * 10,000-unit daily quota.
+ */
+export function buildVideoQueries(recipe: Recipe, modelQuery?: string): string[] {
+  const title = recipe.title.trim();
+  const cuisine = recipe.cuisine.trim();
+  const core = titleTokens(title);
+
+  const variants = [
+    modelQuery?.trim(),
+    buildVideoQuery(recipe),
+    // The dish reordered around its own defining words, which is how a cook
+    // would type it: "saag chicken recipe" for "Chicken Saag".
+    core.length >= 2 ? `${[...core].reverse().join(" ")} recipe` : null,
+    // A description rather than a name, for dishes whose name we invented.
+    cuisine && core.length > 0 ? `${cuisine} ${core.join(" ")} recipe` : null,
+    `how to make ${title}`,
+  ];
+
+  const seen = new Set<string>();
+  const queries: string[] = [];
+  for (const variant of variants) {
+    const cleaned = variant?.replace(/\s+/g, " ").trim().toLowerCase();
+    if (!cleaned || seen.has(cleaned)) continue;
+    seen.add(cleaned);
+    queries.push(variant!.replace(/\s+/g, " ").trim());
+  }
+  return queries.slice(0, 3);
 }

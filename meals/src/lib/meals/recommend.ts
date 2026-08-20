@@ -10,6 +10,8 @@ import {
   withoutNearDuplicates,
 } from "@/lib/meals/memory";
 import { materialize } from "@/lib/meals/registry";
+import { behaviorAdjustment, summarizeBehavior } from "@/lib/meals/behavior";
+import { dishAxes, selectDiverse } from "@/lib/meals/taxonomy";
 import { youtubeProvider } from "@/lib/video/youtube";
 import { MIN_AVAILABILITY, rankRecipes, type ScoredRecipe } from "@/lib/meals/rank";
 import { portionsFor, type Portion } from "@/lib/nutrition/engine";
@@ -61,6 +63,23 @@ function diversify(scored: ScoredRecipe[], count: number): ScoredRecipe[] {
     if (!picked.includes(candidate)) picked.push(candidate);
   }
   return picked;
+}
+
+/**
+ * Counts by axis for the dishes just shown, so the model can be told where the
+ * recent set is thin rather than only what it may not repeat.
+ */
+function distributionOf(recipes: Recipe[]): Record<string, Record<string, number>> {
+  const distribution: Record<string, Record<string, number>> = {
+    cuisine: {}, format: {}, protein: {}, flavor: {},
+  };
+  for (const recipe of recipes) {
+    for (const [axis, value] of Object.entries(dishAxes(recipe))) {
+      distribution[axis] = distribution[axis] ?? {};
+      distribution[axis][value] = (distribution[axis][value] ?? 0) + 1;
+    }
+  }
+  return distribution;
 }
 
 /** How many recent recommendation rows count as "recently shown". */
@@ -174,6 +193,14 @@ export async function recommendMeals(options: {
 
   // What the household has already been offered lately, most recent first.
   const recentRows = await db.listRecommendations(RECENTLY_SHOWN_DEPTH);
+
+  // What the household has done, and what it has already committed to this
+  // week. Both steer generation and ranking; neither costs a provider call.
+  const [signals, currentPlan] = await Promise.all([
+    db.listSignals(300),
+    db.getCurrentPlan(today),
+  ]);
+  const behavior = summarizeBehavior(signals, known, currentPlan);
   const shownRecently = new Map<string, number>();
   const shownTitles: string[] = [];
   for (const [index, rec] of recentRows.entries()) {
@@ -189,8 +216,29 @@ export async function recommendMeals(options: {
   for (const recipe of known) {
     if (shownRecently.has(recipe.id)) shownTitles.push(recipe.title);
   }
+  const titleFor = (key: string) =>
+    known.find(
+      (recipe) =>
+        (recipe.canonical_key ?? canonicalRecipeKey(recipe.title, recipe.cuisine)) === key,
+    )?.title;
+  const titlesWhere = (
+    predicate: (history: { dismissed: number; opened: number; cooked: number }) => boolean,
+  ) =>
+    [...behavior.byDish.entries()]
+      .filter(([, history]) => predicate(history))
+      .map(([key]) => titleFor(key))
+      .filter((title): title is string => Boolean(title))
+      .slice(0, 12);
+
   const generated = await generateMealCandidates(context, {
     exclude: [...context.recent_meals.map((meal) => meal.title), ...shownTitles],
+    planned: (currentPlan?.entries ?? [])
+      .map((entry) => entry.recipe_title)
+      .filter((title): title is string => Boolean(title)),
+    dismissed: titlesWhere((history) => history.dismissed > 0),
+    opened: titlesWhere((history) => history.opened > 0 && history.cooked === 0),
+    cooked: titlesWhere((history) => history.cooked > 0),
+    distribution: distributionOf(known.filter((recipe) => shownRecently.has(recipe.id))),
   });
 
   const { fresh } = dedupeAgainstMemory(generated.recipes, known);
@@ -209,13 +257,20 @@ export async function recommendMeals(options: {
     !excludedKeys.has(recipe.canonical_key ?? canonicalRecipeKey(recipe.title, recipe.cuisine));
 
   const pool = [...known, ...fresh.filter(notExcluded)];
-  let scored = rankRecipes(pool, inventory, context, today).map((entry) => ({
-    ...entry,
-    score:
-      Math.round(
-        (entry.score - noveltyPenalty(entry.recipe, shownRecently, pressure)) * 1000,
-      ) / 1000,
-  }));
+  let scored = rankRecipes(pool, inventory, context, today).map((entry) => {
+    // Behaviour is a bounded delta on top of the deterministic fit score, never
+    // a filter: a dismissal moves a dish down the list, it does not remove an
+    // option the kitchen genuinely supports.
+    const behaviour = behaviorAdjustment(entry.recipe, behavior, { casualAlternative: true });
+    return {
+      ...entry,
+      score:
+        Math.round(
+          (entry.score - noveltyPenalty(entry.recipe, shownRecently, pressure) + behaviour.delta) *
+            1000,
+        ) / 1000,
+    };
+  });
   scored.sort((a, b) => b.score - a.score);
 
   const discoveryUsed = fresh.length > 0;
@@ -240,7 +295,14 @@ export async function recommendMeals(options: {
     }
   }
 
-  const picked = mixProvenAndNew(scored, count);
+  // Spread first, then mix. Order matters: widening the pool *before*
+  // mixProvenAndNew would hand it eight established slots and one exploratory
+  // one, quietly collapsing discovery back to the catalog. So the axes build a
+  // varied shortlist out of the full ranking, and the proven/new mix then picks
+  // the final set from a shortlist that is already spread across cuisine,
+  // format, protein and flavour.
+  const shortlist = selectDiverse(scored, Math.max(count * 3, count));
+  const picked = mixProvenAndNew(shortlist, count);
 
   // Identity before display: every recipe about to be linked to is persisted
   // first, so the detail page can open it and the next refresh knows it was

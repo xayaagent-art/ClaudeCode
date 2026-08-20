@@ -6,6 +6,19 @@ export const runtime = "nodejs";
 
 const bodySchema = z.object({
   event: z.enum([
+    // Current vocabulary.
+    "recommendation_shown",
+    "recommendation_dismissed",
+    "recipe_opened",
+    "video_opened",
+    // Only recorded where playback is genuinely observable. Opening YouTube in
+    // a new tab is not, so that path records video_opened and stops there
+    // rather than inventing a completion nobody measured.
+    "video_started",
+    "video_completed",
+    "planned",
+    "cooked",
+    // Older names still sent by existing clients.
     "recommendation_seen",
     "recommendation_selected",
     "recipe_viewed",
@@ -24,8 +37,12 @@ const bodySchema = z.object({
 });
 
 /**
- * Household learning signals. Persisted only — nothing consumes them for
- * ranking yet, which is deliberate: capture the history first, model later.
+ * Household learning signals.
+ *
+ * These are read now: meals/behavior.ts folds them into ranking pressure, so a
+ * dismissal, an opened recipe or a cooked dinner changes what gets suggested
+ * next. Both the current and the legacy event names are accepted and normalised
+ * on read, which is what lets the vocabulary move without stranding history.
  */
 export async function POST(request: Request) {
   const parsed = bodySchema.safeParse(await readJson<unknown>(request));

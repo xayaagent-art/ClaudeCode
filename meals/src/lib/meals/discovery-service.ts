@@ -1,8 +1,8 @@
 import "server-only";
 import { getDb } from "@/lib/db";
-import { buildVideoQuery, selectBestVideo } from "@/lib/meals/source-quality";
+import { buildVideoQueries, selectBestVideo } from "@/lib/meals/source-quality";
 import type { HouseholdContext, Recipe } from "@/lib/types";
-import type { VideoProvider } from "@/lib/video/provider";
+import type { VideoCandidate, VideoProvider } from "@/lib/video/provider";
 import { youtubeProvider } from "@/lib/video/youtube";
 
 /**
@@ -77,17 +77,34 @@ export async function resolveRecipeSource(
     };
   }
 
-  // C: external discovery. One search per dish, then cached forever.
-  let candidates;
-  try {
-    const query = options.queries?.get(recipe.id) ?? buildVideoQuery(recipe);
-    candidates = await provider.search(query, { limit: 6 });
-  } catch (error) {
-    return {
-      recipe,
-      outcome: "provider_unavailable",
-      reason: `${provider.name} search failed: ${(error as Error).message}`,
-    };
+  // C: external discovery, then cached forever.
+  //
+  // Several phrasings rather than one: our name for a dish is often not the
+  // name cooks use, and the good video sits under theirs. Variants run in
+  // sequence and stop as soon as the pool contains something credible, so the
+  // common case still costs one search and only a hard dish pays for more.
+  const queries = buildVideoQueries(recipe, options.queries?.get(recipe.id));
+  const candidates: VideoCandidate[] = [];
+  const seen = new Set<string>();
+  let searchError: string | null = null;
+
+  for (const query of queries) {
+    try {
+      for (const candidate of await provider.search(query, { limit: 6 })) {
+        if (seen.has(candidate.video_id)) continue;
+        seen.add(candidate.video_id);
+        candidates.push(candidate);
+      }
+    } catch (error) {
+      searchError = `${provider.name} search failed: ${(error as Error).message}`;
+      break;
+    }
+    // Stop as soon as this pool already answers the question well.
+    if (selectBestVideo(candidates, recipe, context)) break;
+  }
+
+  if (candidates.length === 0 && searchError) {
+    return { recipe, outcome: "provider_unavailable", reason: searchError };
   }
 
   const best = selectBestVideo(candidates, recipe, context);

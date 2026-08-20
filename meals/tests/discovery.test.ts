@@ -196,8 +196,11 @@ describe("discovery service", () => {
     const first = await resolveRecipeSource(palak, context, { provider });
     await resolveRecipeSource(first.recipe, context, { provider });
     // The failed attempt is stamped, but a recipe without a video is still
-    // retried — one call per attempt, never a loop within a single request.
-    expect(provider.calls.length).toBeLessThanOrEqual(2);
+    // retried. A single attempt now tries a few phrasings of the dish before
+    // giving up — our name for it is often not the name cooks use — so the
+    // bound is variants-per-attempt, not one. What must never happen is an
+    // unbounded loop, which is what this pins.
+    expect(provider.calls.length).toBeLessThanOrEqual(6);
   });
 
   it("reports provider unavailability instead of faking a source", async () => {
@@ -253,7 +256,7 @@ describe("youtube provider", () => {
     await expect(provider.search("anything")).resolves.toEqual([]);
   });
 
-  it("requests embeddable, medium-length videos and reads the largest thumbnail", async () => {
+  it("requests embeddable videos of any length and reads the largest thumbnail", async () => {
     process.env.YOUTUBE_API_KEY = "test-key";
     const calls: string[] = [];
     const fetchMock = vi.fn(async (input: string | URL) => {
@@ -305,7 +308,11 @@ describe("youtube provider", () => {
     expect(results[0].view_count).toBe(12345);
     expect(results[0].url).toBe("https://www.youtube.com/watch?v=vid1");
     expect(calls[0]).toContain("videoEmbeddable=true");
-    expect(calls[0]).toContain("videoDuration=medium");
+    // Duration is deliberately NOT filtered at search time any more. `medium`
+    // meant 4-20 minutes, which threw away the 2-3 minute cook-alongs that are
+    // usually the best answer along with every Short. The ranker judges length
+    // now, with the whole field to choose from.
+    expect(calls[0]).not.toContain("videoDuration=");
     expect(calls[0]).toContain("key=test-key");
 
     vi.unstubAllGlobals();

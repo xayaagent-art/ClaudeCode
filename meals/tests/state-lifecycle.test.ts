@@ -56,6 +56,11 @@ function stubModel() {
         protein_intent: "moderate",
         search_query: `${title.toLowerCase()} recipe`,
         fit_reason: "Uses the spinach you already have.",
+        meal_format: "curry",
+        protein_source: "paneer",
+        flavor_profile: "indian-spiced",
+        instructions: ["Heat the oil.", "Add the spices.", "Simmer and serve."],
+        ingredient_quantities: ["200 g", "150 g", "1 tsp"],
       }));
       return new Response(
         JSON.stringify({
@@ -318,10 +323,13 @@ describe("plan state", () => {
       return entry.recipe_id !== was.recipe_id;
     });
 
-    // Exactly one dinner moved, and swapping a day never calls the model.
+    // Exactly one dinner moved. The swap does ask the model — one targeted
+    // generation for one day, which is what stops the answer being bounded by
+    // whatever happens to be in the library already — but the other six days
+    // are untouched, which is the invariant that matters here.
     expect(changed).toHaveLength(1);
     expect(changed[0].date).toBe(target);
-    expect(aiCalls).toBe(callsBefore);
+    expect(aiCalls).toBe(callsBefore + 1);
     // The replacement has to be openable, like every other link in the week.
     expect(await db.getRecipe(changed[0].recipe_id!)).not.toBeNull();
   });

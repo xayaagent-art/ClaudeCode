@@ -292,6 +292,17 @@ export interface MealFeedback {
  * to work from later; nothing reads them for ranking yet.
  */
 export type PreferenceEvent =
+  // Current vocabulary. See meals/behavior.ts, which folds these into ranking.
+  | "recommendation_shown"
+  | "recommendation_dismissed"
+  | "recipe_opened"
+  | "video_opened"
+  | "video_started"
+  | "video_completed"
+  | "planned"
+  | "cooked"
+  // Older names, still written by existing clients and still in the table.
+  // Kept accepted so the history already collected keeps counting.
   | "recommendation_seen"
   | "recommendation_selected"
   | "recipe_viewed"

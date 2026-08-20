@@ -54,6 +54,11 @@ function conceptFor([title, cuisine, ingredients, prep]: (typeof DISHES)[number]
     estimated_cook_minutes: 25,
     dietary_tags: ["vegetarian"],
     protein_intent: "moderate",
+    meal_format: "curry",
+    protein_source: "paneer",
+    flavor_profile: "indian-spiced",
+    instructions: ["Heat the pan.", "Add the spices.", "Simmer and serve."],
+    ingredient_quantities: ["200 g", "1 tsp"],
     search_query: `${title.toLowerCase()} recipe`,
     fit_reason: `Uses the ${ingredients[0]} you already have.`,
   };

@@ -43,6 +43,22 @@ const candidateSchema = z.object({
   /** What to type into a video search to find someone cooking this. */
   search_query: z.string().min(3).max(120),
   fit_reason: z.string().min(8).max(200),
+  /**
+   * Declared diversity axes. These are the model's own labels and are used to
+   * spread one generated batch; selection is arbitrated by taxonomy.ts, which
+   * derives the same axes from the dish itself and cannot be talked into a
+   * label. Asking for them anyway measurably widens what comes back.
+   */
+  meal_format: z.string().min(2).max(40),
+  protein_source: z.string().min(2).max(40),
+  flavor_profile: z.string().min(2).max(40),
+  /**
+   * Enough to cook from without a video. Generated once, at generation time —
+   * a recipe whose steps are fetched on every view is a recipe that breaks when
+   * the provider does, and pays for the same words repeatedly.
+   */
+  instructions: z.array(z.string().min(4).max(400)).min(2).max(12),
+  ingredient_quantities: z.array(z.string().min(1).max(80)).max(16).default([]),
 });
 
 const resultSchema = z.object({ candidates: z.array(candidateSchema) });
@@ -69,7 +85,8 @@ const candidateJsonSchema = {
         required: [
           "title", "cuisine", "description", "likely_ingredients",
           "estimated_cook_minutes", "dietary_tags", "protein_intent",
-          "search_query", "fit_reason",
+          "search_query", "fit_reason", "meal_format", "protein_source",
+          "flavor_profile", "instructions", "ingredient_quantities",
         ],
         properties: {
           title: { type: "string", description: "The dish, as a cook would name it." },
@@ -89,6 +106,32 @@ const candidateJsonSchema = {
           protein_intent: { type: "string", enum: ["low", "moderate", "high"] },
           search_query: { type: "string", description: "A YouTube search that finds this dish being cooked." },
           fit_reason: { type: "string", description: "Why this suits THIS household and THIS kitchen." },
+          meal_format: {
+            type: "string",
+            description:
+              "One of: bowl, wrap, curry, pasta, tacos, stir-fry, salad, sandwich, skillet, sheet-pan, rice dish, soup/stew, bake, pizza.",
+          },
+          protein_source: {
+            type: "string",
+            description: "The main protein, e.g. paneer, chickpea, lentil, tofu, egg, bean, yogurt, cheese.",
+          },
+          flavor_profile: {
+            type: "string",
+            description:
+              "One of: indian-spiced, mediterranean, east-asian, latin, middle-eastern, creamy, fresh-herby, smoky.",
+          },
+          instructions: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "3-8 numbered-in-order steps a competent home cook can follow without a video. No step numbers in the text.",
+          },
+          ingredient_quantities: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "Approximate quantity for each entry in likely_ingredients, same order, e.g. '200 g' or '2 tbsp'. Use an empty string where a quantity makes no sense.",
+          },
         },
       },
     },
@@ -108,9 +151,32 @@ Rules:
   Ten variations on one dish is a bad answer.
 - Include some genuinely unfamiliar ideas alongside safe ones.
 - Never repeat anything listed as recently eaten or recently suggested.
+- Spread the set across all four axes: cuisine, meal_format, protein_source and
+  flavor_profile. No more than two ideas may share any one of them. Three
+  variations on spinach + paneer/chickpea over rice is the failure this rule
+  exists to prevent, however differently they are named.
+- instructions must be enough to cook the dish with no video: real steps, real
+  order, real technique. Not a summary of the dish.
 - likely_ingredients should be what the dish actually needs, including items the
   household may not have. Do not pretend a recipe needs only what is in stock.
 - estimated_cook_minutes is active cooking time, honestly estimated.`;
+
+/**
+ * Behavioural context for one generation. All optional: a household with no
+ * history still generates, it just has less to steer with.
+ */
+export interface GenerationContext {
+  /** Dish titles already committed to on this week's plan. */
+  planned?: string[];
+  /** Titles the household has dismissed before. */
+  dismissed?: string[];
+  /** Titles opened recently — mild positive interest. */
+  opened?: string[];
+  /** Titles cooked recently, which should not come straight back. */
+  cooked?: string[];
+  /** Counts by axis, e.g. { cuisine: { indian: 6 }, format: { curry: 5 } }. */
+  distribution?: Record<string, Record<string, number>>;
+}
 
 export type CandidateOutcome =
   /** The model answered and the concepts validated. */
@@ -183,12 +249,12 @@ interface RawGeneration {
  */
 export async function generateMealCandidates(
   context: HouseholdContext,
-  options: { exclude?: string[]; count?: number } = {},
+  options: { exclude?: string[]; count?: number } & GenerationContext = {},
 ): Promise<CandidateGeneration> {
   if (!candidateGenerationEnabled()) return empty("disabled");
 
   const provider = activeProviderName();
-  const prompt = buildPrompt(context, options.exclude ?? [], options.count ?? TARGET);
+  const prompt = buildPrompt(context, options.exclude ?? [], options.count ?? TARGET, options);
   let model = provider === "openai" ? "pending" : modelFor("meal_candidate_generation");
 
   try {
@@ -288,7 +354,12 @@ async function generateWithGemini(prompt: string, model: string): Promise<RawGen
  * Compact context. Only what changes the answer goes in the prompt — this runs
  * on every refresh, and every token is billed.
  */
-function buildPrompt(context: HouseholdContext, exclude: string[], count: number): string {
+function buildPrompt(
+  context: HouseholdContext,
+  exclude: string[],
+  count: number,
+  extra: GenerationContext = {},
+): string {
   const payload = {
     meal: context.meal_type,
     kitchen: context.inventory.map((item) => ({
@@ -317,6 +388,15 @@ function buildPrompt(context: HouseholdContext, exclude: string[], count: number
     })),
     recently_eaten: context.recent_meals.map((meal) => meal.title),
     do_not_repeat: exclude,
+    // What the household has actually done, so the model stops re-proposing
+    // dishes it has already been told about and can lean into what landed.
+    on_the_plan_this_week: extra.planned ?? [],
+    dismissed_before: extra.dismissed ?? [],
+    opened_recently: extra.opened ?? [],
+    cooked_recently: extra.cooked ?? [],
+    // Distributions rather than a list: "you have proposed six Indian curries
+    // this week" is actionable in a way that six titles are not.
+    recent_mix: extra.distribution ?? {},
     disliked_before: context.feedback
       .filter((entry) => entry.rating === "never")
       .map((entry) => entry.cuisine)
@@ -325,6 +405,10 @@ function buildPrompt(context: HouseholdContext, exclude: string[], count: number
 
   return [
     `Propose ${count} distinct ${context.meal_type} ideas for tonight.`,
+    "",
+    "Spread them across cuisine, meal_format, protein_source and flavor_profile —",
+    "at most two may share any single one of those. Look at recent_mix and",
+    "deliberately go where it is thin.",
     "",
     "Household and kitchen:",
     JSON.stringify(payload),
@@ -348,15 +432,22 @@ function toRecipe(concept: MealConcept): Recipe {
     tags.push("high_protein");
   }
 
-  const ingredients = concept.likely_ingredients.map((name, index) => ({
-    id: `${id}-ing-${index}`,
-    recipe_id: id,
-    ingredient_name: name,
-    normalized_name: canonicalName(name),
-    quantity: null,
-    unit: null,
-    optional: false,
-  }));
+  // Quantities arrive as free text in the same order as the names ("200 g").
+  // Stored as the unit string with a parsed amount where one is legible, so a
+  // recipe page can show "200 g paneer" rather than "paneer".
+  const ingredients = concept.likely_ingredients.map((name, index) => {
+    const measure = concept.ingredient_quantities[index]?.trim() ?? "";
+    const amount = /^([\d.\/]+)\s*(.*)$/.exec(measure);
+    return {
+      id: `${id}-ing-${index}`,
+      recipe_id: id,
+      ingredient_name: name,
+      normalized_name: canonicalName(name),
+      quantity: amount ? Number(amount[1]) || null : null,
+      unit: amount ? (amount[2] || null) : (measure || null),
+      optional: false,
+    };
+  });
   const nutrition = estimateRecipeNutrition(ingredients);
 
   return {
@@ -382,7 +473,8 @@ function toRecipe(concept: MealConcept): Recipe {
     source_quality: null,
     discovered_at: null,
     cooking_summary: concept.fit_reason,
-    instructions: [],
+    // Written once, here. Nothing downstream regenerates them on view.
+    instructions: concept.instructions.map((step) => step.trim()).filter(Boolean),
     ingredients,
     canonical_key: canonicalRecipeKey(concept.title, concept.cuisine),
     times_cooked: 0,

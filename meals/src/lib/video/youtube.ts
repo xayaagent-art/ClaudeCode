@@ -106,8 +106,10 @@ export class YouTubeProvider implements VideoProvider {
     searchUrl.searchParams.set("type", "video");
     searchUrl.searchParams.set("maxResults", String(limit));
     searchUrl.searchParams.set("videoEmbeddable", "true");
-    // Exclude Shorts-length clips; a 45-second video is not a recipe to cook from.
-    searchUrl.searchParams.set("videoDuration", "medium");
+    // Duration is no longer filtered here. `medium` meant 4-20 minutes, which
+    // threw away both the 2-3 minute cook-alongs that are usually the best
+    // answer and every Short — including the genuinely instructional ones. The
+    // ranker judges duration now, with the full field to choose from.
     searchUrl.searchParams.set("safeSearch", "moderate");
     searchUrl.searchParams.set("relevanceLanguage", "en");
 
