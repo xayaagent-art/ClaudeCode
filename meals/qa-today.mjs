@@ -1,7 +1,7 @@
 import { chromium } from "playwright";
 
 const OUT = "/home/user/ClaudeCode/design/qa/today";
-const iteration = process.argv[2] ?? "01";
+const name = process.argv[2] ?? "iteration-01";
 const BASE = "http://localhost:3311";
 
 const browser = await chromium.launch({ executablePath: "/opt/pw-browsers/chromium" });
@@ -21,9 +21,9 @@ async function shoot(name, width, height) {
 }
 
 // Primary QA viewport, then the two other sizes named in the brief.
-await shoot(`iteration-${iteration}`, 390, 844);
-await shoot(`iteration-${iteration}-393`, 393, 852);
-await shoot(`iteration-${iteration}-430`, 430, 932);
+await shoot(name, 390, 844);
+await shoot(`${name}-393`, 393, 852);
+await shoot(`${name}-430`, 430, 932);
 
 // Functional regression: every destination the screen offers must work.
 const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });

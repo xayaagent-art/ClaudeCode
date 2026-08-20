@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   MEAL_SHARE,
   logsForDay,
+  macrosFor,
   portionFor,
   portionsFor,
   roundServings,
   targetsFor,
   totalsFor,
 } from "@/lib/nutrition/engine";
+import { estimateRecipeNutrition } from "@/lib/nutrition/estimate";
 import { catalogRecipes } from "@/lib/meals/catalog";
 import { seedMembers } from "@/lib/seed";
 import type { MealLog } from "@/lib/types";
@@ -87,5 +89,75 @@ describe("daily totals", () => {
   it("sums targets per scope", () => {
     expect(targetsFor([yash, survi], yash.id).protein).toBe(150);
     expect(targetsFor([yash, survi], null)).toEqual({ calories: 3750, protein: 250 });
+  });
+});
+
+describe("macro breakdown", () => {
+  const withMacros = () => ({ carbs: 60, fat: 18 });
+  const withoutMacros = () => ({ carbs: null, fat: null });
+
+  const logs = [
+    log({ member_id: yash.id, protein: 42, servings: 1.5 }),
+    log({ member_id: survi.id, protein: 31, servings: 1 }),
+  ];
+
+  it("scales derived macros by the servings actually logged", () => {
+    const totals = macrosFor(logs, null, withMacros);
+    expect(totals.carbs).toBe(150); // 60 * 1.5 + 60 * 1
+    expect(totals.fat).toBe(45); // 18 * 1.5 + 18 * 1
+    expect(totals.logs_covered).toBe(2);
+  });
+
+  it("takes protein from the log rather than deriving it", () => {
+    // The stub reports no macros at all; protein still totals, because it was
+    // measured when the meal was logged.
+    expect(macrosFor(logs, null, withoutMacros).protein).toBe(73);
+  });
+
+  it("reports unknown macros as null, never as zero", () => {
+    const totals = macrosFor(logs, null, withoutMacros);
+    expect(totals.carbs).toBeNull();
+    expect(totals.fat).toBeNull();
+    expect(totals.logs_covered).toBe(0);
+    expect(totals.logs_total).toBe(2);
+  });
+
+  it("scopes to one member", () => {
+    const totals = macrosFor(logs, survi.id, withMacros);
+    expect(totals.protein).toBe(31);
+    expect(totals.carbs).toBe(60);
+    expect(totals.logs_total).toBe(1);
+  });
+
+  it("says how much of the day it could break down", () => {
+    const mixed = macrosFor(logs, null, (id) => (id === recipe.id ? { carbs: 10, fat: 2 } : withoutMacros()));
+    expect(mixed.logs_covered).toBe(2);
+    expect(mixed.logs_total).toBe(2);
+  });
+});
+
+describe("recipe macro estimates", () => {
+  it("derives carbohydrate and fat from the ingredient list", () => {
+    const estimate = estimateRecipeNutrition(recipe.ingredients);
+    expect(estimate.carbs_per_serving).toBeGreaterThan(0);
+    expect(estimate.fat_per_serving).toBeGreaterThan(0);
+  });
+
+  it("stays consistent with the energy it reports", () => {
+    // Atwater: the macros should account for the calories to within the
+    // rounding and the unmatched-ingredient gap, not drift by a factor.
+    const e = estimateRecipeNutrition(recipe.ingredients);
+    const fromMacros = 4 * e.protein_per_serving + 4 * e.carbs_per_serving! + 9 * e.fat_per_serving!;
+    expect(fromMacros).toBeGreaterThan(e.calories_per_serving * 0.6);
+    expect(fromMacros).toBeLessThan(e.calories_per_serving * 1.6);
+  });
+
+  it("returns null macros when nothing in the list resolves", () => {
+    const estimate = estimateRecipeNutrition([
+      { ingredient_name: "zzzz unmatchable", quantity: 1, unit: "cup", optional: false },
+    ] as typeof recipe.ingredients);
+    expect(estimate.carbs_per_serving).toBeNull();
+    expect(estimate.fat_per_serving).toBeNull();
+    expect(estimate.calories_per_serving).toBe(0);
   });
 });

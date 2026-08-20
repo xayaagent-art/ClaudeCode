@@ -5,6 +5,7 @@ import { useMemo } from "react";
 import { track } from "@/lib/analytics";
 import type { TodayPayload } from "@/lib/views/today";
 import type { CurrentRecommendationSet } from "@/lib/views/recommendations";
+import { DayProgress } from "@/components/day-progress";
 import { FoodImage } from "@/components/food-image";
 import { imageFor, useEnrichment } from "@/components/use-enrichment";
 
@@ -43,9 +44,19 @@ export function TodayView({
   }, [alternatives, hero]);
   const presentations = useEnrichment(visibleIds);
 
+  // `thumbnail_url` first — that is the column the resolved dishes actually
+  // carry, and passing only `image_url` here was why the hero sat on a
+  // placeholder waiting for enrichment to hand back a picture the server had
+  // already loaded.
   const heroImage = hero
-    ? imageFor({ id: hero.recipe_id, image_url: hero.image_url }, presentations)
+    ? imageFor(
+        { id: hero.recipe_id, thumbnail_url: hero.thumbnail_url, image_url: hero.image_url },
+        presentations,
+      )
     : null;
+
+  // The household line is always first; a member view is a later screen.
+  const day = initial.progress.find((row) => row.scope === "household") ?? initial.progress[0];
 
   const atHome = hero ? Math.round(hero.availability * 100) : 0;
 
@@ -60,7 +71,7 @@ export function TodayView({
 
   return (
     <>
-      <header className="flex items-center justify-between gap-4 px-gutter pad-safe-top pb-5 pt-4">
+      <header className="flex items-center justify-between gap-4 px-gutter pad-safe-top pb-3.5 pt-4">
         <p className="text-item font-semibold tracking-tight">Human Not Found</p>
         <Link
           href="/settings"
@@ -70,6 +81,12 @@ export function TodayView({
           {initial.members.map((m) => m.name.charAt(0)).join("").slice(0, 2) || "YS"}
         </Link>
       </header>
+
+      {day ? (
+        <div className="pb-6">
+          <DayProgress consumed={day.consumed} target={day.target} macros={day.macros} />
+        </div>
+      ) : null}
 
       {kitchenEmpty ? (
         <EmptyKitchen />
@@ -156,7 +173,7 @@ export function TodayView({
           </section>
 
           {initial.use_soon.length > 0 ? (
-            <section className="px-gutter pt-9">
+            <section className="px-gutter pt-7">
               <p className="text-item font-semibold tracking-tight">Use soon</p>
               <div className="mt-3 flex flex-wrap gap-2">
                 {initial.use_soon.slice(0, 4).map((item) => (
@@ -175,7 +192,7 @@ export function TodayView({
           ) : null}
 
           {alternatives.length > 0 ? (
-            <section className="px-gutter pt-9">
+            <section className="px-gutter pt-7">
               <div className="flex items-baseline justify-between gap-4">
                 <p className="text-item font-semibold tracking-tight">Not feeling it?</p>
                 <Link href="/meals" className="text-meta font-medium text-ink-muted">

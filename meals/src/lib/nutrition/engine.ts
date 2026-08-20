@@ -89,3 +89,62 @@ export function targetsFor(members: Member[], memberId: string | null): DayTotal
 export function logsForDay(logs: MealLog[], dayISO: string): MealLog[] {
   return logs.filter((log) => log.consumed_at.slice(0, 10) === dayISO);
 }
+
+export interface MacroTotals {
+  /** Grams eaten. Protein is persisted per log; the other two are derived. */
+  protein: number;
+  carbs: number | null;
+  fat: number | null;
+  /**
+   * How many of the day's logs we could break down. The UI needs this to say
+   * "estimated from 2 of 3 meals" rather than presenting a partial sum as the
+   * day's total.
+   */
+  logs_covered: number;
+  logs_total: number;
+}
+
+/**
+ * Carbohydrate and fat eaten today, worked out from the recipes behind the
+ * logs.
+ *
+ * Calories and protein are recorded at the moment a meal is logged, so they are
+ * measurements of what the household said it ate. Carbohydrate and fat are not
+ * stored anywhere — the recipe row has never carried them — so they are derived
+ * here from the ingredient list, at the serving size actually logged.
+ *
+ * That difference is deliberate and is surfaced in the UI: the ring is real,
+ * the carbohydrate and fat figures are labelled as estimates. The alternative
+ * considered was inventing carbohydrate and fat targets by splitting the
+ * calorie goal, which would put two invented numbers on the screen; a household
+ * that has not set those targets does not have them, and the screen says so.
+ */
+export function macrosFor(
+  logs: MealLog[],
+  memberId: string | null,
+  perServing: (recipeId: string) => { carbs: number | null; fat: number | null },
+): MacroTotals {
+  const scope = logs.filter((log) => memberId === null || log.member_id === memberId);
+
+  let protein = 0;
+  let carbs = 0;
+  let fat = 0;
+  let covered = 0;
+
+  for (const log of scope) {
+    protein += log.protein;
+    const per = perServing(log.recipe_id);
+    if (per.carbs === null || per.fat === null) continue;
+    covered += 1;
+    carbs += per.carbs * log.servings;
+    fat += per.fat * log.servings;
+  }
+
+  return {
+    protein: Math.round(protein),
+    carbs: covered > 0 ? Math.round(carbs) : null,
+    fat: covered > 0 ? Math.round(fat) : null,
+    logs_covered: covered,
+    logs_total: scope.length,
+  };
+}

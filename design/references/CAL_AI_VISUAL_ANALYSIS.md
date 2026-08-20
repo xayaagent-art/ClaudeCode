@@ -227,13 +227,26 @@ Recurring structures worth naming:
 
 ## 11. Patterns we should NOT adopt
 
-1. **Calorie-centric hierarchy.** Their hero number is consumption. Ours is a
-   decision. Copying the shape but filling it with nutrition totals would make
-   us a worse tracker instead of a better cook's app.
+1. **Calorie-centric hierarchy — as the *largest* thing on the screen.** Their
+   hero number is consumption. Ours is a decision, and the dish stays the
+   biggest object on Today.
+
+   **Corrected.** As first written this item read as an argument against
+   calorie tracking, and Today shipped without it. That was a misreading of my
+   own note. Calorie and macro tracking is a feature of this product; what we
+   decline is giving it the hero slot. It lives above the dish as a strip —
+   value, ring, three macros — which is the reference's hero pair at
+   supporting scale. See `design/qa/today/ITERATIONS.md`, round 2.
 2. **Streaks and gamification.** Wrong incentive for a household that sometimes
    orders takeaway.
-3. **The macro triplet as standing dashboard furniture.** We have no equivalent
-   three co-equal numbers, and inventing some would be noise.
+3. ~~**The macro triplet as standing dashboard furniture.** We have no
+   equivalent three co-equal numbers, and inventing some would be noise.~~
+
+   **Corrected.** We do have three: protein, carbohydrate and fat. Protein is
+   recorded on every meal log; carbohydrate and fat are derived from the
+   ingredient list and carry an `est.` mark. The reference's three-up grid is
+   adopted, without the mini rings and without inventing targets for the two
+   the household has not set.
 4. **The day-of-week strip as the top control.** Their unit of work is a logged
    day. Ours is *tonight* and *this week*; a seven-day selector at the top of
    Today implies per-day browsing we do not offer.
@@ -243,8 +256,10 @@ Recurring structures worth naming:
    a food-planning tool that should look calm.
 7. **"..." overflow menus** on detail screens — we do not have enough actions to
    justify hiding any.
-8. **Numeric progress rings everywhere.** We have one genuinely ring-shaped
-   metric at most (ingredients on hand), and even that reads better as a number.
+8. **Numeric progress rings everywhere.** Exactly one ring, on the calorie
+   figure, where a fraction against a daily goal is genuinely ring-shaped.
+   Availability stays a number: `94%` is a property of a dish, not a day's
+   progress toward anything.
 
 ## 12. Human Not Found translation
 

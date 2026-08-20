@@ -3,7 +3,8 @@ import { getDb } from "@/lib/db";
 import { todayISO } from "@/lib/date";
 import { inspectAll } from "@/lib/kitchen/state";
 import { chooseConfirmations, type ConfirmationPrompt } from "@/lib/kitchen/confirmations";
-import { logsForDay, targetsFor, totalsFor } from "@/lib/nutrition/engine";
+import { logsForDay, macrosFor, targetsFor, totalsFor, type MacroTotals } from "@/lib/nutrition/engine";
+import { estimateRecipeNutrition } from "@/lib/nutrition/estimate";
 import type { MealRecommendation } from "@/lib/types";
 
 export interface TodayPayload {
@@ -14,6 +15,8 @@ export interface TodayPayload {
     name: string;
     consumed: { calories: number; protein: number };
     target: { calories: number; protein: number };
+    /** Grams eaten today. Protein measured, carbohydrate and fat derived. */
+    macros: MacroTotals;
   }[];
   meals_today: {
     batch_id: string;
@@ -36,6 +39,15 @@ export interface TodayPayload {
         protein_per_serving: number;
         calories_per_serving: number;
         image_url: string | null;
+        /**
+         * The picture the recipe already has. Omitting this was why the hero
+         * arrived without a photograph even for dishes whose row carried one:
+         * the alternatives pass a whole Recipe and got theirs, while the hero
+         * passed a hand-built object that stopped at `image_url` — which is
+         * null on every row we have — and had to wait for a client enrichment
+         * round to be told what the server already knew.
+         */
+        thumbnail_url: string | null;
       })
     | null;
 }
@@ -66,6 +78,22 @@ export async function getTodayPayload(date = todayISO()): Promise<TodayPayload> 
   // removed used to blank the whole card, and an older catalog row could sit
   // there looking current. Today now shows the newest suggestion that can
   // actually be opened, from the same store every other screen reads.
+  // Per-serving carbohydrate and fat for a logged recipe, computed once per
+  // recipe rather than per log — a household of four eating the same dinner is
+  // four logs against one ingredient list.
+  const macroCache = new Map<string, { carbs: number | null; fat: number | null }>();
+  const macroPerServing = (recipeId: string) => {
+    const cached = macroCache.get(recipeId);
+    if (cached) return cached;
+    const source = recipes.find((r) => r.id === recipeId);
+    const estimate = source
+      ? estimateRecipeNutrition(source.ingredients)
+      : { carbs_per_serving: null, fat_per_serving: null };
+    const value = { carbs: estimate.carbs_per_serving, fat: estimate.fat_per_serving };
+    macroCache.set(recipeId, value);
+    return value;
+  };
+
   const eatenToday = new Set(todaysLogs.map((log) => log.recipe_id));
   let pending: (typeof recommendations)[number] | undefined;
   let recipe: Awaited<ReturnType<typeof db.getRecipe>> = null;
@@ -91,6 +119,7 @@ export async function getTodayPayload(date = todayISO()): Promise<TodayPayload> 
       name: scope.name,
       consumed: totalsFor(todaysLogs, scope.id),
       target: targetsFor(members, scope.id),
+      macros: macrosFor(todaysLogs, scope.id, macroPerServing),
     })),
     meals_today: todaysLogs.map((log) => ({
       batch_id: log.batch_id,
@@ -133,6 +162,7 @@ export async function getTodayPayload(date = todayISO()): Promise<TodayPayload> 
             protein_per_serving: recipe.protein_per_serving,
             calories_per_serving: recipe.calories_per_serving,
             image_url: recipe.image_url,
+            thumbnail_url: recipe.thumbnail_url,
           }
         : null,
   };

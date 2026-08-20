@@ -52,9 +52,25 @@ function portionFor(name: string): number {
 export interface NutritionEstimate {
   calories_per_serving: number;
   protein_per_serving: number;
+  /**
+   * Carbohydrate and fat per serving, in grams, or null when no matched
+   * ingredient carried them. Null is not zero: a dish whose ingredients we
+   * could not resolve has an unknown fat content, and rendering that as "0 g"
+   * would be a measurement we never made.
+   */
+  carbs_per_serving: number | null;
+  fat_per_serving: number | null;
   /** How much of the ingredient list the generic table actually recognised. */
   coverage: number;
 }
+
+const EMPTY: NutritionEstimate = {
+  calories_per_serving: 0,
+  protein_per_serving: 0,
+  carbs_per_serving: null,
+  fat_per_serving: null,
+  coverage: 0,
+};
 
 /**
  * Estimate per-serving calories and protein from an ingredient list.
@@ -65,13 +81,14 @@ export interface NutritionEstimate {
  */
 export function estimateRecipeNutrition(ingredients: RecipeIngredient[]): NutritionEstimate {
   const used = ingredients.filter((ingredient) => !ingredient.optional);
-  if (used.length === 0) {
-    return { calories_per_serving: 0, protein_per_serving: 0, coverage: 0 };
-  }
+  if (used.length === 0) return EMPTY;
 
   let calories = 0;
   let protein = 0;
+  let carbs = 0;
+  let fat = 0;
   let matched = 0;
+  let macroMatched = 0;
 
   for (const ingredient of used) {
     const match = builtinGenericMatch(ingredient.ingredient_name);
@@ -80,16 +97,26 @@ export function estimateRecipeNutrition(ingredients: RecipeIngredient[]): Nutrit
     const grams = portionFor(ingredient.ingredient_name);
     calories += (match.calories_per_100g * grams) / 100;
     protein += (match.protein_per_100g * grams) / 100;
+    if (match.carbs_per_100g !== null && match.fat_per_100g !== null) {
+      macroMatched += 1;
+      carbs += (match.carbs_per_100g * grams) / 100;
+      fat += (match.fat_per_100g * grams) / 100;
+    }
   }
 
   const coverage = matched / used.length;
   // Nothing recognised means we genuinely do not know; say so rather than
   // returning a confident-looking zero.
-  if (matched === 0) return { calories_per_serving: 0, protein_per_serving: 0, coverage: 0 };
+  if (matched === 0) return EMPTY;
 
   return {
     calories_per_serving: Math.round(Math.min(Math.max(calories, 150), 1200)),
     protein_per_serving: Math.round(Math.min(Math.max(protein, 3), 90)),
+    // Reported only when the ingredients that were recognised also carried a
+    // macro breakdown. One matched spice out of nine ingredients is not a
+    // carbohydrate figure for the dish.
+    carbs_per_serving: macroMatched > 0 ? Math.round(carbs) : null,
+    fat_per_serving: macroMatched > 0 ? Math.round(fat) : null,
     coverage: Math.round(coverage * 100) / 100,
   };
 }

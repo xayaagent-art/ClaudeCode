@@ -60,6 +60,15 @@
   --text-dish--line-height: 30px;
   --text-dish--letter-spacing: -0.022em;
 
+  /*
+   * Section headers and the wordmark. Referenced by `text-item` since the
+   * first pass at this screen; the token itself was never declared, so every
+   * one of those headings had been silently falling back to body size.
+   */
+  --text-item: 17px;
+  --text-item--line-height: 22px;
+  --text-item--letter-spacing: -0.01em;
+
   /* Small-caps section opener. The only place tracking goes positive. */
   --text-label: 11px;
   --text-label--line-height: 14px;
