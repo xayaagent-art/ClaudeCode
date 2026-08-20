@@ -123,6 +123,8 @@ export async function resolveRecipeSource(
     ...recipe,
     video_url: best.candidate.url,
     video_platform: best.candidate.platform,
+    video_duration_seconds: best.candidate.duration_seconds,
+    video_view_count: best.candidate.view_count,
     thumbnail_url: best.candidate.thumbnail_url ?? recipe.thumbnail_url,
     source_name: best.candidate.channel || provider.name,
     attribution: best.candidate.channel

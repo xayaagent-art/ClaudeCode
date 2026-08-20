@@ -21,22 +21,22 @@ export function BottomNav() {
   return (
     <nav
       aria-label="Primary"
-      className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-ground/95 backdrop-blur-sm pad-safe-bottom pt-2 md:inset-y-0 md:right-auto md:left-0 md:w-56 md:border-t-0 md:border-r md:px-4 md:pt-10"
+      className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-ground/92 backdrop-blur-md pad-safe-bottom pt-2 lg:inset-y-0 lg:right-auto lg:left-0 lg:w-56 lg:border-t-0 lg:border-r lg:px-4 lg:pt-10"
     >
-      <ul className="mx-auto flex max-w-md items-stretch justify-around md:mx-0 md:max-w-none md:flex-col md:gap-1">
+      <ul className="mx-auto flex max-w-md items-stretch justify-around lg:mx-0 lg:max-w-none lg:flex-col lg:gap-1">
         {DESTINATIONS.map((destination) => {
           const active =
             pathname === destination.href || pathname.startsWith(`${destination.href}/`);
           const Icon = destination.icon;
           return (
-            <li key={destination.href} className="flex-1 md:flex-none">
+            <li key={destination.href} className="flex-1 lg:flex-none">
               <Link
                 href={destination.href}
                 aria-current={active ? "page" : undefined}
-                className={`flex min-h-11 flex-col items-center justify-center gap-1 rounded-xl px-3 py-1.5 text-meta transition-colors md:flex-row md:justify-start md:gap-3 md:px-3 md:py-2.5 md:text-body ${
+                className={`flex min-h-12 flex-col items-center justify-center gap-1 rounded-xl px-3 py-1.5 text-[11px] leading-none tracking-tight transition-colors lg:flex-row lg:justify-start lg:gap-3 lg:px-3 lg:py-2.5 lg:text-body ${
                   active
-                    ? "text-accent md:bg-accent-soft"
-                    : "text-ink-muted hover:text-ink md:hover:bg-surface-sunken"
+                    ? "text-accent lg:bg-accent-soft"
+                    : "text-ink-muted hover:text-ink lg:hover:bg-surface-sunken"
                 }`}
               >
                 <Icon filled={active} />

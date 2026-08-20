@@ -41,6 +41,8 @@ function recipe(overrides: Partial<Recipe> & { title: string }): Recipe {
     source_name: null,
     video_url: null,
     video_platform: null,
+    video_duration_seconds: null,
+    video_view_count: null,
     thumbnail_url: null,
     attribution: null,
     source_quality: null,

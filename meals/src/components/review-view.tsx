@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { track } from "@/lib/analytics";
 import type { Classification, ConfidenceBand, StorageLocation } from "@/lib/types";
-import { Button, Card, ErrorNote, Pill } from "@/components/ui";
+import { Button, Card, ErrorNote, Pill, StickyBar } from "@/components/ui";
 
 export interface ReviewItem {
   id: string;
@@ -38,6 +38,9 @@ export function ReviewView({ receipt, items }: { receipt: ReviewReceipt; items: 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
+  // The clean items are the machine's work, not the household's. They collapse
+  // behind a count so the screen only asks about the handful it is unsure of.
+  const [showAll, setShowAll] = useState(false);
 
   const { ready, review, excluded } = useMemo(() => {
     const readyItems: ReviewItem[] = [];
@@ -116,41 +119,38 @@ export function ReviewView({ receipt, items }: { receipt: ReviewReceipt; items: 
 
   return (
     <>
-      <header className="px-5 pt-8 pb-6">
+      <header className="px-gutter pad-safe-top pb-6 pt-8">
         <p className="text-meta text-ink-muted">
-          {receipt.purchase_date ?? "Date not legible"}
+          {receipt.merchant ?? "Your receipt"}
           {receipt.total !== null ? ` · $${receipt.total.toFixed(2)}` : ""}
         </p>
-        <h1 className="mt-1 text-display font-semibold tracking-tight">
-          {receipt.merchant ?? "Receipt"}
+        <h1 className="mt-1 text-hero font-semibold tracking-tight">
+          {ready.length} item{ready.length === 1 ? "" : "s"} ready
         </h1>
-        <p className="mt-2 text-body text-ink-muted">
-          {addCount} food item{addCount === 1 ? "" : "s"} detected
-          {excluded.length > 0 ? ` · ${excluded.length} left out` : ""}
-        </p>
+        {review.length > 0 ? (
+          <p className="mt-2 text-body text-ink-muted">
+            {review.length} need{review.length === 1 ? "s" : ""} a quick look.
+          </p>
+        ) : (
+          <p className="mt-2 text-body text-ink-muted">Everything read cleanly.</p>
+        )}
         {receipt.parser === "fixture" ? (
-          <p className="mt-4 rounded-xl border border-warn/25 bg-warn-soft px-4 py-3 text-meta text-warn">
-            Demo mode — this is a bundled sample receipt, not a reading of your photo.
+          <p className="mt-4 rounded-card bg-warn-soft px-4 py-3 text-meta text-warn">
+            This is a bundled sample receipt, not a reading of your photo.
           </p>
         ) : null}
       </header>
 
       {review.length > 0 ? (
-        <section className="px-5 pb-8" aria-label="Needs review">
-          <h2 className="pb-1 text-section font-semibold">Needs review</h2>
-          <p className="pb-4 text-meta text-ink-muted">
-            We weren&apos;t confident about these. Accept them as they are, or fix them.
-          </p>
+        <section className="px-gutter pb-8" aria-label="Needs a quick look">
+          <p className="label-cap pb-3">Needs a quick look</p>
           <ul className="space-y-3">
             {review.map((item) => (
               <Card as="li" key={item.id} className="p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="truncate text-body font-medium">{item.normalized_name}</p>
-                    <p className="mt-0.5 font-mono text-meta text-ink-faint">{item.raw_name}</p>
-                  </div>
-                  <Pill tone={item.band === "low" ? "danger" : "warn"}>{item.band} confidence</Pill>
-                </div>
+                <p className="font-mono text-meta text-ink-faint">&ldquo;{item.raw_name}&rdquo;</p>
+                <p className="mt-1 text-section font-medium">
+                  {titleCaseName(item.normalized_name)}?
+                </p>
                 {item.note ? <p className="mt-2 text-meta text-ink-muted">{item.note}</p> : null}
 
                 {editing === item.id ? (
@@ -174,12 +174,21 @@ export function ReviewView({ receipt, items }: { receipt: ReviewReceipt; items: 
         </section>
       ) : null}
 
-      <section className="px-5 pb-8" aria-label="Ready to add">
-        <h2 className="pb-1 text-section font-semibold">Ready to add</h2>
-        <p className="pb-3 text-meta text-ink-muted">
-          {ready.length} item{ready.length === 1 ? "" : "s"} matched cleanly.
-        </p>
-        <ul>
+      <section className="px-gutter pb-8" aria-label="Ready to add">
+        <button
+          type="button"
+          onClick={() => setShowAll((open) => !open)}
+          aria-expanded={showAll}
+          className="flex min-h-11 w-full items-center justify-between text-left"
+        >
+          <span className="label-cap">
+            {showAll ? "Hide" : `View all ${ready.length}`}
+          </span>
+          <span aria-hidden="true" className="text-meta text-ink-faint">
+            {showAll ? "−" : "+"}
+          </span>
+        </button>
+        <ul hidden={!showAll}>
           {ready.map((item) => (
             <li key={item.id} className="border-b border-line last:border-b-0">
               {editing === item.id ? (
@@ -217,11 +226,8 @@ export function ReviewView({ receipt, items }: { receipt: ReviewReceipt; items: 
       </section>
 
       {excluded.length > 0 ? (
-        <section className="px-5 pb-8" aria-label="Not added">
-          <h2 className="pb-1 text-section font-semibold">Not going to the kitchen</h2>
-          <p className="pb-3 text-meta text-ink-muted">
-            Kept on the receipt, kept out of meal planning.
-          </p>
+        <section className="px-gutter pb-8" aria-label="Not added">
+          <p className="label-cap pb-3">Not food</p>
           <ul>
             {excluded.map((item) => (
               <li
@@ -258,13 +264,19 @@ export function ReviewView({ receipt, items }: { receipt: ReviewReceipt; items: 
 
       {error ? <ErrorNote>{error}</ErrorNote> : null}
 
-      <div className="sticky bottom-20 z-30 px-5 pb-6 pt-2 md:bottom-4">
+      <div className="pad-nav" />
+
+      <StickyBar>
         <Button full onClick={confirm} disabled={saving || addCount === 0}>
-          {saving ? "Adding…" : `Add ${addCount} item${addCount === 1 ? "" : "s"} to Kitchen`}
+          {saving ? "Adding…" : "Add to Kitchen"}
         </Button>
-      </div>
+      </StickyBar>
     </>
   );
+}
+
+function titleCaseName(value: string): string {
+  return value.replace(/\b[a-z]/g, (character) => character.toUpperCase());
 }
 
 function EditForm({

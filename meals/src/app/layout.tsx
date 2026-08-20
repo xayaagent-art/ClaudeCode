@@ -31,8 +31,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         >
           Skip to content
         </a>
-        {/* Desktop gets a wider column and a side rail; mobile keeps bottom nav. */}
-        <div className="mx-auto min-h-dvh w-full max-w-2xl pb-24 md:max-w-5xl md:pb-8 md:pl-56">
+        {/*
+          A phone-shaped canvas, centred. Desktop gets the side rail and a
+          little more room, but deliberately not a dashboard width — this is a
+          product you use standing in a kitchen, and stretching the hero card
+          across 1400px would make it something else.
+        */}
+        <div className="mx-auto min-h-dvh w-full max-w-[26rem] md:max-w-[34rem] md:pl-0 lg:pl-56">
           <main id="main">{children}</main>
         </div>
         <BottomNav />

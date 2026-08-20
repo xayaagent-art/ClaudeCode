@@ -107,7 +107,19 @@ export async function enrichRecipes(
   }
 
   return {
-    presentations: recipes.map((recipe) => presentationFor(enriched.get(recipe.id) ?? recipe)),
+    presentations: recipes.map((recipe) => {
+      const after = enriched.get(recipe.id);
+      const presentation = presentationFor(after ?? recipe);
+      // A recipe we just tried and came back empty-handed for is settled, not
+      // pending. Without this, a deployment with no video provider configured
+      // leaves every card shimmering forever waiting for an answer that is
+      // never coming — `discovered_at` is only stamped when the provider
+      // actually replied, so "we asked and got nothing" has to be said here.
+      if (after && presentation.image_state === "pending") {
+        return { ...presentation, image_state: "unavailable" as const };
+      }
+      return presentation;
+    }),
     searched: queue.length,
   };
 }

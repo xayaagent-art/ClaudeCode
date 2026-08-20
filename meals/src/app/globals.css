@@ -26,24 +26,50 @@
   --color-good: #3f6b4e;
   --color-good-soft: #eaf0eb;
 
-  --radius-card: 18px;
+  /* One radius family. Cards and sheets share it so nothing looks borrowed. */
+  --radius-card: 20px;
+  --radius-tile: 14px;
+  --radius-sheet: 28px;
+
+  /* 4/8/12/16/20/24/32/40 — every margin in the app comes from here. */
+  --spacing-gutter: 20px;
 
   --font-sans: var(--font-app), ui-sans-serif, system-ui, -apple-system,
     "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 
-  --text-display: 30px;
-  --text-display--line-height: 36px;
-  --text-display--letter-spacing: -0.02em;
-  --text-title: 22px;
-  --text-title--line-height: 28px;
-  --text-title--letter-spacing: -0.015em;
-  --text-section: 18px;
-  --text-section--line-height: 24px;
-  --text-section--letter-spacing: -0.01em;
+  /*
+   * Five sizes and no more. The old scale topped out at 30px and leaned on
+   * 13px grey for everything secondary, which is what made the app read as a
+   * tool rather than a product. Hero is genuinely large, secondary text is
+   * 14px rather than 13, and there is a real gap between each step.
+   */
+  --text-hero: 34px;
+  --text-hero--line-height: 38px;
+  --text-hero--letter-spacing: -0.03em;
+  --text-hero--font-weight: 640;
+
+  --text-display: 28px;
+  --text-display--line-height: 34px;
+  --text-display--letter-spacing: -0.024em;
+
+  --text-title: 21px;
+  --text-title--line-height: 27px;
+  --text-title--letter-spacing: -0.018em;
+
+  --text-section: 17px;
+  --text-section--line-height: 23px;
+  --text-section--letter-spacing: -0.012em;
+
   --text-body: 16px;
-  --text-body--line-height: 24px;
-  --text-meta: 13px;
-  --text-meta--line-height: 18px;
+  --text-body--line-height: 23px;
+
+  --text-meta: 14px;
+  --text-meta--line-height: 19px;
+
+  /* Small-caps section labels: the only place tracking goes positive. */
+  --text-label: 12px;
+  --text-label--line-height: 16px;
+  --text-label--letter-spacing: 0.07em;
 }
 
 @layer base {
@@ -78,6 +104,59 @@
     padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
   }
 
+  /* Room for the fixed nav plus any sticky CTA sitting above it. */
+  .pad-nav {
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 92px);
+  }
+
+  .px-gutter {
+    padding-left: var(--spacing-gutter);
+    padding-right: var(--spacing-gutter);
+  }
+
+  .mx-gutter {
+    margin-left: var(--spacing-gutter);
+    margin-right: var(--spacing-gutter);
+  }
+
+  .pb-safe-plus {
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+  }
+
+  .pad-safe-top {
+    padding-top: calc(env(safe-area-inset-top, 0px) + 8px);
+  }
+
+  /* Section label — used above every list on Today, Plan and Kitchen. */
+  .label-cap {
+    font-size: var(--text-label);
+    line-height: var(--text-label--line-height);
+    letter-spacing: var(--text-label--letter-spacing);
+    text-transform: uppercase;
+    font-weight: 600;
+    color: var(--color-ink-faint);
+  }
+
+  /* Images fade in when enrichment lands, rather than popping. */
+  .img-settle {
+    animation: img-settle 260ms ease-out both;
+  }
+
+  .sheet-rise {
+    animation: sheet-rise 260ms cubic-bezier(0.32, 0.72, 0, 1) both;
+  }
+
+  .scrim-in {
+    animation: scrim-in 200ms ease-out both;
+  }
+
+  /* Content that is being refreshed but must stay readable underneath. */
+  .is-refreshing {
+    opacity: 0.55;
+    transition: opacity 200ms ease-out;
+    pointer-events: none;
+  }
+
   .stage-enter {
     animation: stage-enter 220ms ease-out both;
   }
@@ -110,6 +189,35 @@
   to {
     opacity: 1;
     transform: none;
+  }
+}
+
+@keyframes img-settle {
+  from {
+    opacity: 0;
+    transform: scale(1.02);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes sheet-rise {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: none;
+  }
+}
+
+@keyframes scrim-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
   }
 }
 

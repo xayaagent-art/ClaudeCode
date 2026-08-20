@@ -218,6 +218,14 @@ export interface Recipe {
   /** Watchable cooking video for this dish, when one has been found. */
   video_url: string | null;
   video_platform: VideoPlatform | null;
+  /**
+   * What the video card shows about the video itself. Persisted rather than
+   * re-derived: the card needs "8 min · 640K views" and re-searching YouTube
+   * to render a line of text is exactly what the async enrichment split exists
+   * to stop. Null on recipes resolved before these were recorded.
+   */
+  video_duration_seconds: number | null;
+  video_view_count: number | null;
   /** Real image from the chosen source. Null falls back to a typographic plate. */
   thumbnail_url: string | null;
   attribution: string | null;

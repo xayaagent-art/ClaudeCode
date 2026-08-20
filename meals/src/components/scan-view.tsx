@@ -154,8 +154,8 @@ export function ScanView() {
       </header>
 
       {busy ? (
-        <section className="px-5 py-6" aria-live="polite">
-          <h2 className="text-section font-semibold">Reading your receipt</h2>
+        <section className="px-gutter py-6" aria-live="polite">
+          <h2 className="text-title font-semibold tracking-tight">Scanning your groceries</h2>
           <ul className="mt-5 space-y-3">
             <Stage state={stages.upload} label={labels.upload ?? "Uploading photo"} />
             <Stage state={stages.read} label={labels.read ?? "Reading the receipt"} />
@@ -167,12 +167,18 @@ export function ScanView() {
           </p>
         </section>
       ) : (
-        <section className="px-5">
-          <p className="text-body text-ink-muted">
-            Photograph the whole receipt, flat and in good light. We&apos;ll pull out the groceries,
-            leave out anything that isn&apos;t food, and let you check anything unclear before it
-            reaches your kitchen.
-          </p>
+        <section className="px-gutter">
+          {/*
+            Camera-first: the frame is the screen, the instruction is one line,
+            and the capture button is the biggest thing on it. The explanation
+            of what happens afterwards is not needed before the photo is taken.
+          */}
+          <div className="relative mx-auto flex aspect-[3/4] w-full max-w-sm items-center justify-center overflow-hidden rounded-card bg-surface-sunken">
+            <span aria-hidden="true" className="absolute inset-6 rounded-tile border-2 border-dashed border-line-strong" />
+            <span className="relative px-8 text-center text-body text-ink-muted">
+              Fit the whole receipt in frame
+            </span>
+          </div>
 
           <div className="mt-8 space-y-3">
             <Button
@@ -213,9 +219,10 @@ export function ScanView() {
             }}
           />
 
-          <p className="mt-8 text-meta text-ink-faint">
-            Receipt photos are stored privately and can be deleted from the receipt at any time.
+          <p className="mt-8 text-center text-meta text-ink-faint">
+            Photos stay private and can be deleted at any time.
           </p>
+          <div className="pad-nav" />
         </section>
       )}
 

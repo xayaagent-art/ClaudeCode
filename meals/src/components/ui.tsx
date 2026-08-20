@@ -226,3 +226,126 @@ export function RecipePlate({
     </div>
   );
 }
+
+/**
+ * A food image that knows it might not have arrived yet.
+ *
+ * Enrichment is asynchronous by design (M2), so a card is drawn before any
+ * thumbnail exists and updated when one lands. Three states, never a broken
+ * image: `resolved` shows the photograph, `pending` shows a quiet shimmer
+ * because a lookup is still coming, and `unavailable` shows the typographic
+ * plate for a dish nobody found a picture of. Reserving the aspect ratio in
+ * every state is what stops the card jumping when the image settles.
+ */
+export function FoodImage({
+  title,
+  cuisine,
+  imageUrl,
+  state = "resolved",
+  className = "",
+  rounded = "",
+}: {
+  title: string;
+  cuisine: string;
+  imageUrl?: string | null;
+  state?: "resolved" | "pending" | "unavailable";
+  className?: string;
+  rounded?: string;
+}) {
+  if (imageUrl) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={imageUrl}
+        alt=""
+        className={`img-settle h-full w-full object-cover ${rounded} ${className}`}
+        loading="lazy"
+        decoding="async"
+      />
+    );
+  }
+
+  if (state === "pending") {
+    return (
+      <div
+        aria-hidden="true"
+        className={`pulse-soft h-full w-full bg-[linear-gradient(140deg,#eef1ec,#e2e6de)] ${rounded} ${className}`}
+      />
+    );
+  }
+
+  // Nothing is borrowed or generated. A dish with no photograph gets a plate
+  // that looks deliberate — legible cuisine, real contrast — rather than an
+  // empty grey rectangle that reads as a failed image.
+  return (
+    <div
+      aria-hidden="true"
+      className={`flex h-full w-full flex-col items-center justify-center gap-2 bg-[linear-gradient(145deg,#e9eee8,#dde3da)] ${rounded} ${className}`}
+    >
+      <svg width="26" height="26" viewBox="0 0 24 24" className="text-accent-ink/35">
+        <path
+          d="M4 10h16M6 10a6 6 0 0 1 12 0M5 14h14l-1 4H6l-1-4Z"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          fill="none"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+      {/*
+        Truncated rather than wrapped: an 80px tile cannot hold
+        "Mediterranean", and clipping it mid-word to "DITERRANE" looks like a
+        rendering fault. One line, ellipsised, is legibly a label.
+      */}
+      <span className="w-full truncate px-3 text-center text-meta font-semibold uppercase tracking-[0.06em] text-accent-ink/60">
+        {cuisine || title.slice(0, 14)}
+      </span>
+    </div>
+  );
+}
+
+/** Small-caps label that opens a section. */
+export function SectionLabel({ children }: { children: ReactNode }) {
+  return <p className="label-cap px-gutter pb-3 pt-8">{children}</p>;
+}
+
+/**
+ * The three numbers a dinner is actually judged on, on one line.
+ *
+ * Deliberately three and not eight: time, protein and how much of it is
+ * already in the kitchen. Everything else the ranker knows stays internal.
+ */
+export function StatRow({
+  items,
+}: {
+  items: { value: string; label: string }[];
+}) {
+  return (
+    <div className="flex items-stretch gap-2">
+      {items.map((item, index) => (
+        <div
+          key={item.label}
+          className={`flex-1 ${index > 0 ? "border-l border-line pl-3" : ""}`}
+        >
+          <p className="tabular text-title font-semibold">{item.value}</p>
+          <p className="text-meta text-ink-muted">{item.label}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * A CTA pinned above the bottom navigation.
+ *
+ * The decision on a screen should always be within thumb reach, whatever the
+ * scroll position — "Cook this" at the end of a long recipe is a scroll away
+ * from being used.
+ */
+export function StickyBar({ children }: { children: ReactNode }) {
+  return (
+    <div className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-ground/92 px-gutter pt-3 backdrop-blur-md md:left-56">
+      <div className="mx-auto max-w-2xl pb-safe-plus">{children}</div>
+    </div>
+  );
+}

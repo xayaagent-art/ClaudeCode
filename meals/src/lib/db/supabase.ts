@@ -132,6 +132,12 @@ function toRecipe(row: Row, ingredients: RecipeIngredient[]): Recipe {
     source_name: (row.source_name as string | null) ?? null,
     video_url: (row.video_url as string | null) ?? null,
     video_platform: (row.video_platform as Recipe["video_platform"]) ?? null,
+    video_duration_seconds: row.video_duration_seconds === null || row.video_duration_seconds === undefined
+      ? null
+      : Number(row.video_duration_seconds),
+    video_view_count: row.video_view_count === null || row.video_view_count === undefined
+      ? null
+      : Number(row.video_view_count),
     thumbnail_url: (row.thumbnail_url as string | null) ?? null,
     attribution: (row.attribution as string | null) ?? null,
     source_quality: (row.source_quality as Recipe["source_quality"]) ?? null,

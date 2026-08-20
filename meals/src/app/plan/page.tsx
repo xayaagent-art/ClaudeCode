@@ -1,19 +1,11 @@
-import { getDb } from "@/lib/db";
 import { todayISO } from "@/lib/date";
+import { getPlanPayload } from "@/lib/views/plan";
 import { PlanView } from "@/components/plan-view";
 
 export const dynamic = "force-dynamic";
 
 export default async function PlanPage() {
-  const db = getDb();
-  const start = todayISO();
-  const [plan, inventory] = await Promise.all([db.getCurrentPlan(start), db.listInventory()]);
-
-  return (
-    <PlanView
-      startDate={start}
-      entries={plan?.entries ?? []}
-      kitchenEmpty={inventory.filter((i) => i.status !== "out").length === 0}
-    />
-  );
+  // Read only. Opening Plan has never generated anything and still does not.
+  const payload = await getPlanPayload(todayISO());
+  return <PlanView payload={payload} />;
 }

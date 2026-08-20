@@ -2,207 +2,275 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { track } from "@/lib/analytics";
 import { postJson } from "@/lib/client-fetch";
-import { addDays, formatShortDay } from "@/lib/date";
-import type { PlanEntry } from "@/lib/types";
-import { AvatarLink, Button, EmptyState, ErrorNote, LinkButton, Pill } from "@/components/ui";
+import { formatShortDay } from "@/lib/date";
+import type { PlanDay, PlanPayload } from "@/lib/views/plan";
+import { AvatarLink, Button, ErrorNote, FoodImage, LinkButton } from "@/components/ui";
+import { Sheet } from "@/components/sheet";
+import { imageFor, useEnrichment } from "@/components/use-enrichment";
 
-export function PlanView({
-  startDate,
-  entries,
-  kitchenEmpty,
-}: {
-  startDate: string;
-  entries: PlanEntry[];
-  kitchenEmpty: boolean;
-}) {
+/**
+ * The week.
+ *
+ * Seven cards, each one a dinner you can see. Changing a day opens a sheet and
+ * changes that day — the other six are never touched, which is the behaviour
+ * /api/plans/day exists to provide and the reason "Regenerate week" is a quiet
+ * secondary action rather than the only way to fix a Wednesday.
+ */
+const PLAN_STAGES = ["Building your week", "Balancing variety", "Using what you already have"];
+
+export function PlanView({ payload }: { payload: PlanPayload }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
+  const [stage, setStage] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [openDay, setOpenDay] = useState<string | null>(null);
-  const [swapping, setSwapping] = useState<string | null>(null);
+  const [changing, setChanging] = useState<PlanDay | null>(null);
+  const [swapping, setSwapping] = useState(false);
 
-  const days = Array.from({ length: 7 }, (_, index) => addDays(startDate, index));
+  const recipeIds = useMemo(
+    () => payload.days.map((day) => day.recipe?.id).filter((id): id is string => Boolean(id)),
+    [payload.days],
+  );
+  const presentations = useEnrichment(recipeIds);
 
-  // The old week stays on screen for the whole of this. `router.refresh()` re-
-  // renders the server component in place, so React swaps the days over once
-  // the new plan exists rather than blanking the list while it is built.
-  async function generate() {
+  /**
+   * The existing week stays on screen throughout. `router.refresh()` re-renders
+   * the server component in place, so the days swap over once the new plan
+   * exists rather than the list blanking while it is built.
+   */
+  async function regenerate() {
     setBusy(true);
     setError(null);
+    setStage(0);
+    const ticker = setInterval(() => setStage((s) => Math.min(s + 1, PLAN_STAGES.length - 1)), 2500);
     try {
-      await postJson("/api/plans/generate", { start_date: startDate, days: 7 });
-      track("plan_generated", { start_date: startDate });
+      await postJson("/api/plans/generate", { start_date: payload.start_date, days: 7 });
+      track("plan_generated", { start_date: payload.start_date });
       router.refresh();
-    } catch (caught) {
-      setError((caught as Error).message);
+    } catch {
+      setError("Couldn't rebuild the week just now.");
     } finally {
+      clearInterval(ticker);
       setBusy(false);
     }
   }
 
-  /** One day, not seven. See /api/plans/day. */
+  /** One day, not seven. */
   async function swapDay(date: string) {
-    setSwapping(date);
+    setSwapping(true);
     setError(null);
     try {
-      await postJson("/api/plans/day", { start_date: startDate, date });
-      track("plan_day_replaced", { date });
-      setOpenDay(null);
+      await postJson("/api/plans/day", { start_date: payload.start_date, date });
+      track("planned", { date });
+      setChanging(null);
       router.refresh();
-    } catch (caught) {
-      setError((caught as Error).message);
+    } catch {
+      setError("Couldn't find another dinner for that day.");
     } finally {
-      setSwapping(null);
+      setSwapping(false);
     }
   }
 
-  async function replaceEntries(next: PlanEntry[]) {
-    setError(null);
-    const response = await fetch("/api/plans", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ start_date: startDate, entries: next }),
-    });
-    if (!response.ok) {
-      setError("That change didn't save.");
-      return;
-    }
-    setOpenDay(null);
-    router.refresh();
-  }
-
-  function setKind(date: string, kind: PlanEntry["kind"]) {
-    const next = entries.map((entry) =>
-      entry.date === date && entry.meal_type === "dinner"
-        ? {
-            ...entry,
-            kind,
-            recipe_id: kind === "recipe" ? entry.recipe_id : null,
-            recipe_title: kind === "recipe" ? entry.recipe_title : null,
-            note: kind === "eating_out" ? "Eating out" : kind === "leftovers" ? "Leftovers" : entry.note,
-          }
-        : entry,
-    );
-    void replaceEntries(next);
-  }
-
-  const dinnerByDate = new Map(
-    entries.filter((e) => e.meal_type === "dinner").map((e) => [e.date, e]),
-  );
-  const lunchByDate = new Map(
-    entries.filter((e) => e.meal_type === "lunch").map((e) => [e.date, e]),
-  );
+  const today = payload.days[0]?.date;
 
   return (
     <>
-      <header className="flex items-start justify-between gap-4 px-5 pt-8 pb-6">
-        <div>
-          <p className="text-meta text-ink-muted">Dinners</p>
-          <h1 className="mt-1 text-display font-semibold tracking-tight">This week</h1>
+      <header className="px-gutter pad-safe-top pb-6 pt-8">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-meta text-ink-muted">{rangeLabel(payload)}</p>
+            <h1 className="mt-1 text-hero font-semibold tracking-tight">This week</h1>
+          </div>
+          <AvatarLink initials="YS" />
         </div>
-        <AvatarLink initials="YS" />
       </header>
 
-      {entries.length === 0 ? (
-        kitchenEmpty ? (
-          <EmptyState
-            title="Nothing to plan around yet"
-            body="A week plan works from what's already in the kitchen. Scan a receipt first and we'll build the week around it."
-            primary={<LinkButton href="/kitchen/scan">Scan receipt</LinkButton>}
-          />
-        ) : (
-          <EmptyState
-            title="What are we eating this week?"
-            body="We'll lay out seven dinners that share ingredients, use what needs eating first, and leave room for leftovers."
-            primary={
-              <Button onClick={generate} disabled={busy}>
-                {busy ? "Planning…" : "Plan my week"}
-              </Button>
-            }
-          />
-        )
+      {!payload.has_plan ? (
+        <section className="px-gutter py-4">
+          <div className="rounded-card bg-surface p-8 text-center shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+            <h2 className="text-title font-semibold">This week is open.</h2>
+            <p className="mx-auto mt-2 max-w-xs text-body text-ink-muted">
+              {payload.kitchen_empty
+                ? "Scan a receipt first and we'll build the week around what you bought."
+                : "Seven dinners that share ingredients and use what needs eating first."}
+            </p>
+            <div className="mt-6">
+              {payload.kitchen_empty ? (
+                <LinkButton href="/kitchen/scan" full>
+                  Scan groceries
+                </LinkButton>
+              ) : (
+                <Button full onClick={regenerate} disabled={busy}>
+                  {busy ? PLAN_STAGES[stage] : "Plan my week"}
+                </Button>
+              )}
+            </div>
+          </div>
+        </section>
       ) : (
         <>
-          <ul className={`px-5 transition-opacity ${busy ? "opacity-60" : ""}`} aria-busy={busy}>
-            {days.map((date) => {
-              const dinner = dinnerByDate.get(date);
-              const lunch = lunchByDate.get(date);
-              return (
-                <li key={date} className="border-b border-line py-4 last:border-b-0">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="min-w-0">
-                      <p className="text-meta text-ink-muted">
-                        {formatShortDay(date)} · {date.slice(5).replace("-", "/")}
-                      </p>
-                      {dinner?.kind === "recipe" && dinner.recipe_id ? (
-                        <Link
-                          href={`/recipes/${dinner.recipe_id}`}
-                          className="mt-1 block truncate text-body font-medium hover:underline"
-                        >
-                          {dinner.recipe_title}
-                        </Link>
-                      ) : (
-                        <p className="mt-1 text-body font-medium text-ink-muted">
-                          {dinner?.kind === "eating_out"
-                            ? "Eating out"
-                            : dinner?.kind === "leftovers"
-                              ? "Leftovers"
-                              : "Nothing planned"}
-                        </p>
-                      )}
-                      {lunch ? (
-                        <p className="mt-1 text-meta text-ink-muted">Lunch: {lunch.note}</p>
-                      ) : null}
-                      {dinner?.kind === "recipe" && dinner.note ? (
-                        <p className="mt-1 text-meta text-ink-faint">{dinner.note}</p>
-                      ) : null}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setOpenDay(openDay === date ? null : date)}
-                      aria-expanded={openDay === date}
-                      className="min-h-11 shrink-0 px-2 text-meta text-ink-muted hover:text-ink"
-                    >
-                      Change
-                    </button>
-                  </div>
-
-                  {openDay === date ? (
-                    <div className="stage-enter mt-3 flex flex-wrap gap-2">
-                      <Button size="sm" variant="secondary" onClick={() => setKind(date, "eating_out")}>
-                        Eating out
-                      </Button>
-                      <Button size="sm" variant="secondary" onClick={() => setKind(date, "leftovers")}>
-                        Leftovers
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        disabled={swapping === date}
-                        onClick={() => void swapDay(date)}
-                      >
-                        {swapping === date ? "Finding one…" : "Pick something else"}
-                      </Button>
-                    </div>
-                  ) : null}
-                </li>
-              );
-            })}
+          <ul className={`space-y-3 px-gutter ${busy ? "is-refreshing" : ""}`}>
+            {payload.days.map((day) => (
+              <li key={day.date}>
+                <p className="label-cap pb-2 pt-3">
+                  {day.date === today ? "Today" : formatShortDay(day.date)}
+                </p>
+                <DayCard
+                  day={day}
+                  image={
+                    day.recipe
+                      ? imageFor(day.recipe, presentations)
+                      : { url: null, state: "unavailable" as const }
+                  }
+                  onChange={() => setChanging(day)}
+                />
+              </li>
+            ))}
           </ul>
 
-          <div className="flex flex-wrap items-center gap-3 px-5 py-8">
-            <Button onClick={generate} disabled={busy} variant="secondary">
-              {busy ? "Rebuilding your week…" : "Regenerate week"}
+          <div className="px-gutter pt-8">
+            <Button variant="secondary" full onClick={regenerate} disabled={busy}>
+              {busy ? PLAN_STAGES[stage] : "Regenerate week"}
             </Button>
-            <Pill tone="neutral">Dinners only for now</Pill>
           </div>
         </>
       )}
 
       {error ? <ErrorNote>{error}</ErrorNote> : null}
+
+      <div className="pad-nav" />
+
+      <Sheet
+        open={changing !== null}
+        title={changing ? `Change ${labelFor(changing.date, today)}` : "Change day"}
+        onClose={() => setChanging(null)}
+        footer={
+          <Button
+            full
+            onClick={() => changing && void swapDay(changing.date)}
+            disabled={swapping}
+          >
+            {swapping ? "Finding a dinner…" : "Find another dinner"}
+          </Button>
+        }
+      >
+        <div className="px-gutter py-4">
+          {changing?.recipe ? (
+            <>
+              <p className="text-meta text-ink-muted">Currently</p>
+              <div className="mt-2 flex items-center gap-4 rounded-card bg-surface-sunken p-3">
+                <div className="size-16 shrink-0 overflow-hidden rounded-tile bg-surface">
+                  <FoodImage
+                    title={changing.recipe.title}
+                    cuisine={changing.recipe.cuisine}
+                    imageUrl={imageFor(changing.recipe, presentations).url}
+                    state={imageFor(changing.recipe, presentations).state}
+                  />
+                </div>
+                <div className="min-w-0">
+                  <p className="truncate text-section font-medium">{changing.recipe.title}</p>
+                  <p className="tabular mt-1 text-meta text-ink-muted">
+                    {changing.recipe.total_time_minutes} min ·{" "}
+                    {changing.recipe.protein_per_serving} g protein
+                  </p>
+                </div>
+              </div>
+            </>
+          ) : (
+            <p className="text-body text-ink-muted">Nothing planned for this day yet.</p>
+          )}
+
+          <p className="mt-6 text-meta text-ink-muted">
+            We&apos;ll find a different dinner for this day only. The rest of your week stays as
+            it is.
+          </p>
+        </div>
+      </Sheet>
     </>
   );
+}
+
+function DayCard({
+  day,
+  image,
+  onChange,
+}: {
+  day: PlanDay;
+  image: { url: string | null; state: "resolved" | "pending" | "unavailable" };
+  onChange: () => void;
+}) {
+  if (day.kind !== "recipe" || !day.recipe) {
+    return (
+      <div className="flex items-center justify-between gap-4 rounded-card bg-surface p-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+        <p className="text-body text-ink-muted">
+          {day.kind === "eating_out"
+            ? "Eating out"
+            : day.kind === "leftovers"
+              ? "Leftovers"
+              : "Nothing planned"}
+        </p>
+        <button
+          type="button"
+          onClick={onChange}
+          className="min-h-11 shrink-0 px-2 text-meta font-medium text-accent"
+        >
+          Change
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="overflow-hidden rounded-card bg-surface shadow-[0_1px_3px_rgba(0,0,0,0.06)]">
+      <Link href={`/recipes/${day.recipe.id}`} className="flex items-center gap-4 p-3">
+        <div className="size-20 shrink-0 overflow-hidden rounded-tile bg-surface-sunken">
+          <FoodImage
+            title={day.recipe.title}
+            cuisine={day.recipe.cuisine}
+            imageUrl={image.url}
+            state={image.state}
+          />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-section font-semibold">{day.recipe.title}</p>
+          <p className="tabular mt-1 text-meta text-ink-muted">
+            {day.recipe.total_time_minutes} min · {day.recipe.protein_per_serving} g protein
+          </p>
+          {day.note ? (
+            <p className="mt-1 line-clamp-1 text-meta text-ink-faint">{day.note}</p>
+          ) : null}
+        </div>
+      </Link>
+      <div className="flex justify-end border-t border-line px-3">
+        <button
+          type="button"
+          onClick={onChange}
+          className="min-h-11 px-2 text-meta font-medium text-accent"
+        >
+          Change
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function labelFor(date: string, today: string | undefined): string {
+  return date === today ? "today" : formatShortDay(date);
+}
+
+/** "Aug 17 – 23", from the first and last day actually shown. */
+function rangeLabel(payload: PlanPayload): string {
+  const first = payload.days[0]?.date;
+  const last = payload.days[payload.days.length - 1]?.date;
+  if (!first || !last) return "";
+  const format = (iso: string, withMonth: boolean) => {
+    const date = new Date(`${iso}T00:00:00`);
+    return date.toLocaleDateString("en-US", {
+      month: withMonth ? "short" : undefined,
+      day: "numeric",
+    });
+  };
+  return `${format(first, true)} – ${format(last, false)}`;
 }
