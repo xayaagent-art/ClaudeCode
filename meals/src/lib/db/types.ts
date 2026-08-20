@@ -54,7 +54,7 @@ export interface Database {
   listRecipes(): Promise<Recipe[]>;
 
   saveRecommendations(
-    recs: Omit<MealRecommendation, "id" | "household_id" | "created_at">[],
+    recs: Omit<MealRecommendation, "id" | "household_id" | "created_at" | "batch_id">[],
   ): Promise<MealRecommendation[]>;
   listRecommendations(limit?: number): Promise<MealRecommendation[]>;
 

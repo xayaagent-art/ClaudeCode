@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Database } from "@/lib/db/types";
+import { planCovers } from "@/lib/db/plan-window";
 import { catalogRecipes } from "@/lib/meals/catalog";
 import { HOUSEHOLD_ID, seedHousehold, seedInventorySpecs, seedMembers } from "@/lib/seed";
 import { addDays, todayISO } from "@/lib/date";
@@ -318,14 +319,20 @@ class LocalDatabase implements Database {
   }
 
   async saveRecommendations(
-    recs: Omit<MealRecommendation, "id" | "household_id" | "created_at">[],
+    recs: Omit<MealRecommendation, "id" | "household_id" | "created_at" | "batch_id">[],
   ): Promise<MealRecommendation[]> {
     return this.mutate((s) => {
+      // One write, one timestamp — the rows are a set, and stamping them
+      // individually let a batch straddle a millisecond and read back as two.
+      // Postgres already behaves this way: now() is transaction-scoped.
+      const writtenAt = new Date().toISOString();
+      const batchId = randomUUID();
       const created = recs.map((rec) => ({
         ...rec,
         id: randomUUID(),
         household_id: HOUSEHOLD_ID,
-        created_at: new Date().toISOString(),
+        batch_id: batchId,
+        created_at: writtenAt,
       }));
       s.recommendations.unshift(...created);
       s.recommendations = s.recommendations.slice(0, 200);
@@ -466,7 +473,11 @@ class LocalDatabase implements Database {
   }
 
   async getCurrentPlan(startDate: string): Promise<WeeklyPlan | null> {
-    return (await this.load()).plans.find((p) => p.start_date === startDate) ?? null;
+    // Newest plan that still covers this date — see plan-window.ts.
+    const plans = [...(await this.load()).plans]
+      .filter((plan) => plan.start_date <= startDate)
+      .sort((a, b) => b.start_date.localeCompare(a.start_date));
+    return plans.find((plan) => planCovers(plan, startDate)) ?? null;
   }
 }
 

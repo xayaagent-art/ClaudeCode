@@ -3,7 +3,6 @@ import { getDb } from "@/lib/db";
 import { todayISO } from "@/lib/date";
 import { buildHouseholdContext } from "@/lib/household/context";
 import { generateMealCandidates } from "@/lib/meals/candidates";
-import { resolveSourcesFor } from "@/lib/meals/discovery-service";
 import {
   canonicalRecipeKey,
   dedupeAgainstMemory,
@@ -11,6 +10,7 @@ import {
   withoutNearDuplicates,
 } from "@/lib/meals/memory";
 import { materialize } from "@/lib/meals/registry";
+import { youtubeProvider } from "@/lib/video/youtube";
 import { MIN_AVAILABILITY, rankRecipes, type ScoredRecipe } from "@/lib/meals/rank";
 import { portionsFor, type Portion } from "@/lib/nutrition/engine";
 import type { MealRecommendation, MealType, Recipe } from "@/lib/types";
@@ -62,9 +62,6 @@ function diversify(scored: ScoredRecipe[], count: number): ScoredRecipe[] {
   }
   return picked;
 }
-
-/** Extra ranked candidates kept aside in case a top pick has no usable video. */
-const SOURCE_BUFFER = 3;
 
 /** How many recent recommendation rows count as "recently shown". */
 const RECENTLY_SHOWN_DEPTH = 12;
@@ -197,7 +194,6 @@ export async function recommendMeals(options: {
   });
 
   const { fresh } = dedupeAgainstMemory(generated.recipes, known);
-  const searchQueries = generated.searchQueries;
 
   // Exclusion has to be by dish identity, not by id. A generated candidate that
   // turns out to be a dish already excluded carries a different id right up
@@ -246,52 +242,27 @@ export async function recommendMeals(options: {
 
   const picked = mixProvenAndNew(scored, count);
 
-  // Rank first, then look up videos — and only for what is about to be shown,
-  // plus a small buffer in case one of them has no watchable source. Searching
-  // all sixteen candidates would cost 1,600 of a 10,000-unit daily quota to
-  // display three. Anything already resolved is served from cache for free.
-  const buffer = scored
-    .filter((entry) => !picked.includes(entry))
-    .slice(0, SOURCE_BUFFER);
-
   // Identity before display: every recipe about to be linked to is persisted
   // first, so the detail page can open it and the next refresh knows it was
   // offered. This is the fix for both the dead links and the repetition.
   const durableById = await materialize(picked.map((entry) => entry.recipe));
-  const displayFor = picked
-    .map((entry) => durableById.get(entry.recipe.id))
-    .filter((recipe): recipe is Recipe => Boolean(recipe));
 
-  const { recipes: withSources, outcomes } = await resolveSourcesFor(
-    displayFor,
-    context,
-    { queries: searchQueries },
-  );
-
-  // Substitute from the buffer for anything that came back without a video.
-  // A substitute is materialised too — it is about to be linked to.
-  const displayable = [...withSources];
-  for (const [index, recipe] of withSources.entries()) {
-    if (recipe.video_url || buffer.length === 0) continue;
-    const replacement = buffer.shift()!;
-    const durableReplacement = (await materialize([replacement.recipe])).get(
-      replacement.recipe.id,
-    );
-    if (!durableReplacement) continue;
-
-    const resolved = await resolveSourcesFor([durableReplacement], context, {
-      queries: searchQueries,
-    });
-    if (resolved.recipes[0]?.video_url) {
-      displayable[index] = resolved.recipes[0];
-      picked[index] = { ...replacement, recipe: durableReplacement };
-    }
-  }
-
-  const sourceById = new Map(displayable.map((recipe) => [recipe.id, recipe]));
-  const sourceIssue = outcomes.find(
-    (outcome) => outcome.outcome === "provider_unavailable",
-  )?.reason;
+  // Video lookup used to happen here, in front of the reply: resolve a source
+  // for each pick, then — one at a time, awaiting each — swap in a buffer
+  // candidate for anything that came back without a video. That put several
+  // serial YouTube round trips between the household and a suggestion it could
+  // already have read, to decide a line of metadata on a card.
+  //
+  // Meal ideas no longer wait for it. A dish the library has seen before still
+  // shows its video, because materialize returns the stored row with whatever
+  // source was cached on it, and a dish nobody has resolved yet gets one when
+  // it is opened — the recipe page resolves on view and caches the result.
+  // Nothing is lost but the wait.
+  const sourceById = new Map<string, Recipe>();
+  // Whether videos are available at all is a question about configuration, not
+  // a search, so it still gets answered here — for free, and without putting a
+  // network call in front of the reply.
+  const sourceIssue = youtubeProvider.unavailableReason();
 
   const recommendations: Recommendation[] = picked
     .filter((entry) => durableById.has(entry.recipe.id) || sourceById.has(entry.recipe.id))

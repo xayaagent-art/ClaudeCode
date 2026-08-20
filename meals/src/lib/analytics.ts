@@ -22,6 +22,7 @@ export type AnalyticsEvent =
   | "recommendation_regenerated"
   | "meal_feedback_submitted"
   | "plan_generated"
+  | "plan_day_replaced"
   | "inventory_item_added"
   | "inventory_item_updated";
 

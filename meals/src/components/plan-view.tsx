@@ -22,9 +22,13 @@ export function PlanView({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [openDay, setOpenDay] = useState<string | null>(null);
+  const [swapping, setSwapping] = useState<string | null>(null);
 
   const days = Array.from({ length: 7 }, (_, index) => addDays(startDate, index));
 
+  // The old week stays on screen for the whole of this. `router.refresh()` re-
+  // renders the server component in place, so React swaps the days over once
+  // the new plan exists rather than blanking the list while it is built.
   async function generate() {
     setBusy(true);
     setError(null);
@@ -36,6 +40,22 @@ export function PlanView({
       setError((caught as Error).message);
     } finally {
       setBusy(false);
+    }
+  }
+
+  /** One day, not seven. See /api/plans/day. */
+  async function swapDay(date: string) {
+    setSwapping(date);
+    setError(null);
+    try {
+      await postJson("/api/plans/day", { start_date: startDate, date });
+      track("plan_day_replaced", { date });
+      setOpenDay(null);
+      router.refresh();
+    } catch (caught) {
+      setError((caught as Error).message);
+    } finally {
+      setSwapping(null);
     }
   }
 
@@ -106,7 +126,7 @@ export function PlanView({
         )
       ) : (
         <>
-          <ul className="px-5">
+          <ul className={`px-5 transition-opacity ${busy ? "opacity-60" : ""}`} aria-busy={busy}>
             {days.map((date) => {
               const dinner = dinnerByDate.get(date);
               const lunch = lunchByDate.get(date);
@@ -158,12 +178,14 @@ export function PlanView({
                       <Button size="sm" variant="secondary" onClick={() => setKind(date, "leftovers")}>
                         Leftovers
                       </Button>
-                      <Link
-                        href="/meals"
-                        className="inline-flex min-h-11 items-center rounded-full border border-line-strong bg-surface px-4 text-meta font-medium hover:bg-surface-sunken"
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        disabled={swapping === date}
+                        onClick={() => void swapDay(date)}
                       >
-                        Pick something else
-                      </Link>
+                        {swapping === date ? "Finding one…" : "Pick something else"}
+                      </Button>
                     </div>
                   ) : null}
                 </li>
@@ -173,7 +195,7 @@ export function PlanView({
 
           <div className="flex flex-wrap items-center gap-3 px-5 py-8">
             <Button onClick={generate} disabled={busy} variant="secondary">
-              {busy ? "Planning…" : "Regenerate week"}
+              {busy ? "Rebuilding your week…" : "Regenerate week"}
             </Button>
             <Pill tone="neutral">Dinners only for now</Pill>
           </div>

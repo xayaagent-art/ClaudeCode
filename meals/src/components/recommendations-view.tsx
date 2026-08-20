@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { track } from "@/lib/analytics";
 import { postJson } from "@/lib/client-fetch";
+import type { CurrentRecommendationSet } from "@/lib/views/recommendations";
 import { Button, Card, ErrorNote, Pill, RecipePlate } from "@/components/ui";
 
 interface Recommendation {
@@ -38,14 +39,40 @@ interface RecommendResponse {
   generation_note?: string | null;
 }
 
-export function RecommendationsView() {
-  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
-  const [data, setData] = useState<RecommendResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const requested = useRef(false);
+/**
+ * The steps the server is actually working through, in order.
+ *
+ * Shown against the previous set rather than instead of it, so a refresh reads
+ * as the app thinking rather than as the app losing what it had.
+ */
+const PROGRESS_STEPS = [
+  "Looking at your kitchen",
+  "Using what needs eating soon",
+  "Finding meals that fit",
+  "Finishing your options",
+];
 
-  const load = useCallback(async (excludeIds: string[], regenerating = false) => {
-    setState("loading");
+export function RecommendationsView({ initial }: { initial: CurrentRecommendationSet }) {
+  // Server-rendered state is the starting point, not a placeholder to replace.
+  const [data, setData] = useState<RecommendResponse | null>(
+    initial.recommendations.length > 0
+      ? {
+          recommendations: initial.recommendations as Recommendation[],
+          weak_match: false,
+          discovery_used: false,
+          source_note: null,
+        }
+      : null,
+  );
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // Only ever true when nothing has been shown yet — the one case a skeleton
+  // is honest about.
+  const [firstRun, setFirstRun] = useState(initial.recommendations.length === 0);
+  const started = useRef(false);
+
+  const load = useCallback(async (excludeIds: string[], regenerating: boolean) => {
+    setRefreshing(true);
     setError(null);
     try {
       const body = await postJson<RecommendResponse>("/api/meals/recommend", {
@@ -54,9 +81,9 @@ export function RecommendationsView() {
         exclude_recipe_ids: excludeIds,
         regenerate: regenerating,
       });
+      // Replace only on success. A failed refresh must not cost the household
+      // the set it was already looking at.
       setData(body);
-      setState("ready");
-      // One "seen" signal per recommendation actually shown.
       for (const [index, rec] of body.recommendations.entries()) {
         track("recommendation_seen", {
           recipe_id: rec.recipe.id,
@@ -68,20 +95,29 @@ export function RecommendationsView() {
       }
     } catch (caught) {
       setError((caught as Error).message);
-      setState("error");
+    } finally {
+      setRefreshing(false);
+      setFirstRun(false);
     }
   }, []);
 
   useEffect(() => {
-    if (requested.current) return;
-    requested.current = true;
-    void load([]);
-  }, [load]);
+    // The only automatic call in this component, and it is not a mount effect
+    // in spirit: it fires when the household has never been given a set at
+    // all, which is the state arriving at Find Meals is a request to fix. Once
+    // a set exists it is persisted, so every later visit — including back —
+    // renders from the server and this never runs again.
+    if (!firstRun || started.current) return;
+    started.current = true;
+    void load([], false);
+  }, [firstRun, load]);
 
   function regenerate() {
     track("recommendation_regenerated", { count: data?.recommendations.length ?? 0 });
     void load(data?.recommendations.map((r) => r.recipe.id) ?? [], true);
   }
+
+  const showSkeleton = firstRun && !data;
 
   return (
     <>
@@ -98,18 +134,20 @@ export function RecommendationsView() {
         </Link>
       </header>
 
-      {state === "loading" ? <LoadingList /> : null}
+      {showSkeleton ? <LoadingList /> : null}
 
-      {state === "error" ? (
+      {refreshing && data ? <RefreshBanner /> : null}
+
+      {error ? (
         <>
           <ErrorNote>{error}</ErrorNote>
           <div className="px-5 pt-5">
-            <Button onClick={() => void load([])}>Try again</Button>
+            <Button onClick={() => void load([], false)}>Try again</Button>
           </div>
         </>
       ) : null}
 
-      {state === "ready" && data ? (
+      {data ? (
         <>
           {data.recommendations.length === 0 ? (
             <div className="px-5 py-12 text-center">
@@ -136,7 +174,9 @@ export function RecommendationsView() {
                   These are the closest matches, but each one needs a few things you don&apos;t have.
                 </p>
               ) : null}
-              <ul className="space-y-4 px-5">
+              <ul
+                className={`space-y-4 px-5 transition-opacity ${refreshing ? "opacity-60" : ""}`}
+              >
                 {data.recommendations.map((rec, index) => (
                   <RecommendationCard key={rec.recipe.id} rec={rec} rank={index + 1} />
                 ))}
@@ -144,13 +184,40 @@ export function RecommendationsView() {
             </>
           )}
           <div className="px-5 py-8">
-            <Button variant="secondary" full onClick={regenerate}>
-              Show me three others
+            <Button variant="secondary" full onClick={regenerate} disabled={refreshing}>
+              {refreshing ? "Finding others…" : "Show me three others"}
             </Button>
           </div>
         </>
       ) : null}
     </>
+  );
+}
+
+/**
+ * Progress shown above the previous set while a new one is being built.
+ * The steps advance on a timer because the server does not stream; they are
+ * named after real stages so the wait describes the work rather than filling it.
+ */
+function RefreshBanner() {
+  const [step, setStep] = useState(0);
+
+  useEffect(() => {
+    const timer = setInterval(
+      () => setStep((current) => Math.min(current + 1, PROGRESS_STEPS.length - 1)),
+      2600,
+    );
+    return () => clearInterval(timer);
+  }, []);
+
+  return (
+    <p
+      className="mx-5 mb-5 flex items-center gap-2 rounded-xl border border-line bg-surface-sunken px-4 py-3 text-meta text-ink-muted"
+      aria-live="polite"
+    >
+      <span className="pulse-soft inline-block h-2 w-2 rounded-full bg-accent" />
+      {PROGRESS_STEPS[step]}…
+    </p>
   );
 }
 

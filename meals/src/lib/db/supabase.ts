@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { randomUUID } from "node:crypto";
 import type { Database } from "@/lib/db/types";
+import { planCovers } from "@/lib/db/plan-window";
 import { catalogRecipes } from "@/lib/meals/catalog";
 import { HOUSEHOLD_ID } from "@/lib/seed";
 import type {
@@ -365,10 +366,12 @@ class SupabaseDatabase implements Database {
   }
 
   async saveRecommendations(
-    recs: Omit<MealRecommendation, "id" | "household_id" | "created_at">[],
+    recs: Omit<MealRecommendation, "id" | "household_id" | "created_at" | "batch_id">[],
   ): Promise<MealRecommendation[]> {
     if (recs.length === 0) return [];
-    const rows = recs.map((rec) => ({ ...rec, household_id: HOUSEHOLD_ID }));
+    // The set is identified where it is written, not inferred where it is read.
+    const batchId = randomUUID();
+    const rows = recs.map((rec) => ({ ...rec, household_id: HOUSEHOLD_ID, batch_id: batchId }));
     return unwrap(
       await this.db.from("meal_recommendations").insert(rows).select(),
       "save recommendations",
@@ -527,13 +530,20 @@ class SupabaseDatabase implements Database {
   }
 
   async getCurrentPlan(startDate: string): Promise<WeeklyPlan | null> {
+    // The plan that covers this date, not the one that begins on it. Matching
+    // `start_date` exactly meant a week generated on Monday became invisible on
+    // Tuesday: Plan read today's date, found nothing, and offered to plan a
+    // week the household had already planned. The saved week was never gone,
+    // only unaddressable.
     const { data } = await this.db
       .from("weekly_plans")
       .select("*")
       .eq("household_id", HOUSEHOLD_ID)
-      .eq("start_date", startDate)
-      .maybeSingle();
-    return (data as unknown as WeeklyPlan) ?? null;
+      .lte("start_date", startDate)
+      .order("start_date", { ascending: false })
+      .limit(1);
+    const plan = ((data as unknown as WeeklyPlan[]) ?? [])[0] ?? null;
+    return planCovers(plan, startDate) ? plan : null;
   }
 }
 

@@ -249,6 +249,8 @@ export interface RankingFactors {
 export interface MealRecommendation {
   id: string;
   household_id: string;
+  /** The set this row was shown as part of. One write, one batch. */
+  batch_id: string;
   recipe_id: string;
   meal_type: MealType;
   recommendation_reason: string;
