@@ -367,9 +367,14 @@ Captured 2026-08-21.
 | Field | Value |
 |---|---|
 | Current branch | `claude/meal-intelligence-ux-overhaul` |
-| HEAD | `6b8f4ebdcd3ed2bb6c1e22865417abb62cb51e00` |
-| Working tree | **clean** (`git status --short` empty) |
+| Last **application-code** commit | `6b8f4ebdcd3ed2bb6c1e22865417abb62cb51e00` |
+| HEAD when this was written | `6b8f4eb`, then this document was committed on top |
+| Working tree | **clean** — run `git status --short` to confirm |
 | Uncommitted files | none |
+
+> The commit that adds `CODEX_HANDOFF.md` is documentation only and touches no
+> application code. `git log -1` gives you the true current HEAD; `6b8f4eb` is
+> the newest commit that changes anything under `meals/`.
 | Remote | `https://github.com/xayaagent-art/ClaudeCode` |
 | Default branch | `main` |
 
@@ -478,7 +483,7 @@ root config to point at meals.
 |---|---|
 | Latest deployment ID | `dpl_J9xeUnEt65QgahjmgRTJwf9zQget` |
 | State | `READY` |
-| Commit deployed | `6b8f4ebdcd3ed2bb6c1e22865417abb62cb51e00` (**= HEAD; up to date**) |
+| Commit deployed | `6b8f4ebdcd3ed2bb6c1e22865417abb62cb51e00` (**the newest application-code commit — the app is up to date**) |
 | Target | `null` (**preview**, not production) |
 | Deployment URL | `https://household-meal-intelligence-nefhtq87u-xayaagent-7097s-projects.vercel.app` |
 | Stable branch alias | `https://household-meal-intelligence-git-14f2a6-xayaagent-7097s-projects.vercel.app` |
@@ -1306,7 +1311,7 @@ Solving it anywhere else first means redoing it.
 # clone and set up
 git clone https://github.com/xayaagent-art/ClaudeCode.git
 cd ClaudeCode
-git checkout claude/meal-intelligence-ux-overhaul     # HEAD = 6b8f4eb
+git checkout claude/meal-intelligence-ux-overhaul     # newest app code: 6b8f4eb
 cd meals
 npm install
 cp .env.example .env.local                            # fill in what you have
@@ -1333,7 +1338,7 @@ git push -u origin claude/meal-intelligence-ux-overhaul
 |---|---|
 | App directory | `meals/` |
 | Branch | `claude/meal-intelligence-ux-overhaul` |
-| HEAD | `6b8f4ebdcd3ed2bb6c1e22865417abb62cb51e00` |
+| Newest app-code commit | `6b8f4ebdcd3ed2bb6c1e22865417abb62cb51e00` |
 | Vercel project | `household-meal-intelligence` / `prj_giyooqI0DfZZ1GjXpxnbcAAXeaYF` |
 | Vercel team | `team_Co6dRlh3QDoeaG7HWo7dlciQ` |
 | Vercel root dir | `meals` |
