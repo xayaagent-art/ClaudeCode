@@ -255,3 +255,37 @@ from this sandbox — so **Image treatment is scored 2 on what was actually
 observed here**, and the gate still fails on that one category. The deployed
 behaviour is stated separately and verified separately, not folded into a score
 for a screen nobody has seen.
+
+---
+
+## Verified on the deployed preview
+
+`/today` on the preview build returns **200**, and the server-rendered HTML
+carries what the local screenshots could not:
+
+```
+<div class="aspect-[3/2] …"><img src="https://i.ytimg.com/vi/k_U7Yj08kVs/hqdefault.jpg" …
+```
+
+Both alternatives carry theirs too (`sBfXW4nPJI8`, `3oA8HijO3jE`). So the
+photographic layout is live even though it cannot be screenshotted from here.
+**Image treatment is still scored 2 above**, because a score is for a screen
+someone has looked at, and nobody has looked at this one.
+
+The calorie strip renders against the household's real targets — `0 / 4,300`,
+`Protein 0g / 150g`, `Carbs est. —`, `Fat est. —` — because nothing has been
+logged today. An empty ring and two em dashes is the correct answer to a day
+with no meals in it, and is what the screen should show rather than a
+plausible-looking number.
+
+One caveat recorded rather than smoothed over: `/today` on the *previous*
+deployment returned a 500 when fetched on 20 Aug. It was observed once and
+the root cause was never established — the runtime-log tools need an
+interactive approval this session cannot obtain. The current deployment
+returns 200, so it is not reproducible now; it is noted here in case it
+returns.
+
+Recipe routes are covered by `tests/recipe-routing.test.ts` and pass locally,
+including the `gen-<cuisine>:<slug>` ids the hero links to. They could not be
+confirmed against the deployment itself: Vercel's SSO protection answers
+those fetches before the application does.
