@@ -19,6 +19,7 @@ delete process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 const { localDatabase, resetLocalDatabase } = await import("@/lib/db/local");
 const { recommendMeals } = await import("@/lib/meals/recommend");
+const { logMeal } = await import("@/lib/meals/log");
 const { getCurrentRecommendations, groupIntoLatestSet } = await import(
   "@/lib/views/recommendations"
 );
@@ -332,5 +333,47 @@ describe("plan state", () => {
     expect(aiCalls).toBe(callsBefore + 1);
     // The replacement has to be openable, like every other link in the week.
     expect(await db.getRecipe(changed[0].recipe_id!)).not.toBeNull();
+  });
+});
+
+describe("today carries what the screen needs to draw", () => {
+  it("hands the hero its stored thumbnail", async () => {
+    await stockKitchen();
+    const generated = await recommendMeals({ mealType: "dinner" });
+    const heroId = generated.recommendations[0].recipe.id;
+
+    // The picture the dish already has, exactly as a resolved recipe carries
+    // it in the deployed database.
+    const thumbnail = "https://i.ytimg.com/vi/TESTVIDEOID/hqdefault.jpg";
+    const recipe = await db.getRecipe(heroId);
+    await db.upsertRecipe({ ...recipe!, thumbnail_url: thumbnail });
+
+    const payload = await getTodayPayload();
+    // Regression guard: latest_recommendation was assembled by hand and
+    // stopped at image_url, which is null on every row we have, so the hero
+    // rendered a placeholder for dishes whose row already held a photograph.
+    expect(payload.latest_recommendation?.thumbnail_url).toBe(thumbnail);
+  });
+
+  it("reports the day's calories and macros from the logs", async () => {
+    await stockKitchen();
+    const generated = await recommendMeals({ mealType: "dinner" });
+
+    const household = () =>
+      getTodayPayload().then((p) => p.progress.find((row) => row.scope === "household")!);
+
+    const before = await household();
+    // Nothing eaten yet: an empty ring, not a plausible-looking number.
+    expect(before.consumed.calories).toBe(0);
+    expect(before.macros.carbs).toBeNull();
+    expect(before.target.calories).toBeGreaterThan(0);
+
+    await logMeal({ recipe_id: generated.recommendations[0].recipe.id, meal_type: "lunch" });
+
+    const after = await household();
+    expect(after.consumed.calories).toBeGreaterThan(0);
+    expect(after.macros.protein).toBe(after.consumed.protein);
+    expect(after.macros.carbs).toBeGreaterThan(0);
+    expect(after.macros.logs_covered).toBe(after.macros.logs_total);
   });
 });
